@@ -51,6 +51,12 @@ npm start
 
 Web UI: open `http://localhost:8789/`. The health badge shows which models are installed.
 
+**Interaction model:** an **uploaded file** waits for you to click **Transcribe file** (you may
+want to change the model/language first). A **mic recording** transcribes **automatically when you
+press Stop** — Stop is treated as "I'm done, go". While a transcription is running the Transcribe
+button is disabled and shows "Transcribing…" so you can't double-submit. The mic also shows a live
+waveform while recording. It's an installable PWA (works offline for the UI shell over http/localhost).
+
 Health check:
 
 ```bash

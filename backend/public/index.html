@@ -78,6 +78,7 @@
   #drop { border: 2px dashed var(--border); border-radius: var(--radius); padding: 26px 18px; text-align: center; color: var(--muted); transition: border-color .15s, background .15s; cursor: pointer; }
   #drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); }
   #drop b { color: var(--text); }
+  .wave { display: block; width: 100%; height: 64px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; }
   .bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-top: 10px; }
   .bar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .2s; }
   .bar > i.indet { width: 35%; animation: slide 1.1s ease-in-out infinite; }
@@ -150,7 +151,8 @@
 
     <section class="panel">
       <h2 class="card-title">🎙️ Record from mic</h2>
-      <div class="row">
+      <canvas class="wave" id="waveMic" width="900" height="64" style="margin-top:0"></canvas>
+      <div class="row" style="margin-top:14px">
         <button id="micBtn" class="big">● Record</button>
         <span class="pill" id="micState">idle</span>
       </div>
@@ -186,7 +188,7 @@ const $ = (id) => document.getElementById(id);
 const ui = {
   model: $("model"), lang: $("lang"), useGpu: $("useGpu"), prompt: $("prompt"),
   drop: $("drop"), file: $("file"), fileinfo: $("fileinfo"),
-  micBtn: $("micBtn"), micState: $("micState"), go: $("go"),
+  micBtn: $("micBtn"), micState: $("micState"), go: $("go"), waveMic: $("waveMic"),
   status: $("status"), prog: $("prog"), stat: $("stat"),
   out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"),
   health: $("health"), themeToggle: $("themeToggle"), installBtn: $("installBtn"),
@@ -195,6 +197,28 @@ const ui = {
 let blobToSend = null, inputName = "audio";
 function setStatus(msg, isErr = false) { ui.status.textContent = msg; ui.status.classList.toggle("err", isErr); }
 function setBusy(on) { ui.prog.className = on ? "indet" : ""; ui.prog.style.width = on ? "" : "0%"; }
+
+// ---------- Live mic waveform ----------
+let liveRAF = null;
+function drawLiveWave(analyser) {
+  const c = ui.waveMic, x = c.getContext("2d"), W = c.width, H = c.height;
+  const buf = new Uint8Array(analyser.fftSize);
+  const loop = () => {
+    analyser.getByteTimeDomainData(buf);
+    x.clearRect(0, 0, W, H);
+    x.lineWidth = 2;
+    x.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--danger").trim() || "#ff6b6b";
+    x.beginPath();
+    for (let i = 0; i < buf.length; i++) { const px = (i / buf.length) * W, py = (buf[i] / 255) * H; i ? x.lineTo(px, py) : x.moveTo(px, py); }
+    x.stroke();
+    liveRAF = requestAnimationFrame(loop);
+  };
+  loop();
+}
+function stopLiveWave() {
+  if (liveRAF) { cancelAnimationFrame(liveRAF); liveRAF = null; }
+  const c = ui.waveMic; c.getContext("2d").clearRect(0, 0, c.width, c.height);
+}
 
 // ---------- Theme ----------
 const THEME_KEY = "stt-theme";
@@ -244,16 +268,23 @@ ui.drop.addEventListener("dragleave", (e) => { e.preventDefault(); ui.drop.class
 ui.drop.addEventListener("drop", (e) => { e.preventDefault(); ui.drop.classList.remove("over"); pickFile(e.dataTransfer.files[0]); });
 
 // ---------- Mic flow (auto-transcribe on Stop) ----------
-let mediaRec = null, chunks = [], micStream = null;
+let mediaRec = null, chunks = [], micStream = null, micAC = null;
 ui.micBtn.addEventListener("click", async () => {
   if (mediaRec && mediaRec.state === "recording") { mediaRec.stop(); return; }
   try { micStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch { setStatus("Mic access denied or unavailable.", true); return; }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  micAC = new AC();
+  const analyser = micAC.createAnalyser(); analyser.fftSize = 1024;
+  micAC.createMediaStreamSource(micStream).connect(analyser);
+  drawLiveWave(analyser);
   chunks = [];
   mediaRec = new MediaRecorder(micStream);
   mediaRec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
   mediaRec.onstop = () => {
+    stopLiveWave();
     micStream.getTracks().forEach(t => t.stop());
+    if (micAC) { micAC.close(); micAC = null; }
     ui.micBtn.textContent = "● Record"; ui.micBtn.classList.remove("rec");
     const type = mediaRec.mimeType || "audio/webm";
     const ext = type.includes("ogg") ? "ogg" : "webm";
@@ -272,9 +303,14 @@ ui.micBtn.addEventListener("click", async () => {
 
 // ---------- Transcribe (shared by file button + mic auto) ----------
 ui.go.addEventListener("click", transcribe);
+let transcribing = false;
 async function transcribe() {
+  if (transcribing) return;              // guard against double-submit (button + mic auto)
   if (!blobToSend) { setStatus("No audio loaded.", true); return; }
-  ui.go.disabled = true; setBusy(true);
+  transcribing = true;
+  ui.go.disabled = true; ui.go.textContent = "Transcribing…";
+  ui.micBtn.disabled = true;
+  setBusy(true);
   ui.out.classList.remove("muted"); ui.out.textContent = "";
   ui.segs.textContent = "—"; ui.stat.textContent = "";
   ui.dlTxt.classList.add("hidden"); ui.dlSrt.classList.add("hidden");
@@ -293,7 +329,12 @@ async function transcribe() {
     ui.stat.textContent = `${p.model} · ${p.language} · ${p.durationMs} ms`;
     setStatus("Done ✓ — processed locally on the server, audio deleted after.");
   } catch (e) { setStatus("Failed: " + (e.message || e), true); }
-  finally { ui.go.disabled = false; setBusy(false); }
+  finally {
+    transcribing = false;
+    ui.go.disabled = false; ui.go.textContent = "Transcribe file";
+    ui.micBtn.disabled = false;
+    setBusy(false);
+  }
 }
 
 // ---------- Render + export ----------
