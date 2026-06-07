@@ -162,7 +162,7 @@
       <label class="field">Model
         <select id="model">
           <option value="onnx-community/whisper-large-v3-turbo">whisper-large-v3-turbo (WebGPU only, high quality)</option>
-          <option value="Xenova/whisper-large-v3">whisper-large-v3 (WebGPU, highest quality)</option>
+          <option value="Xenova/whisper-large-v3">whisper-large-v3 (WebGPU; ~1.5GB, may run out of memory)</option>
           <option value="Xenova/whisper-base">whisper-base (balanced)</option>
           <option value="Xenova/whisper-small">whisper-small (slower)</option>
           <option value="Xenova/whisper-tiny">whisper-tiny (fastest, rough)</option>
@@ -270,7 +270,7 @@ const MODEL_INFO = {
   "Xenova/whisper-large-v3": {
     sizeLabel: "~1.5 GB",
     sizeBytes: 1500 * 1024 * 1024,
-    note: "highest quality; WebGPU + quantized (q4)",
+    note: "highest quality, but heavy — may exceed browser memory and fail; if so, use turbo",
   },
   "Xenova/whisper-base": {
     sizeLabel: "~150 MB",
@@ -941,7 +941,7 @@ async function transcribe() {
     setStatus(`Done ✓ in ${secs.toFixed(1)}s · ${rtf.toFixed(1)}× realtime · fully local, nothing uploaded.`);
   } catch (e) {
     console.error(e);
-    setStatus("Transcription failed: " + (e.message || e), true);
+    setStatus(friendlyError(e), true);
   } finally {
     transcribing = false;
     ui.out.classList.remove("live");
@@ -949,6 +949,22 @@ async function transcribe() {
     ui.micBtn.disabled = false;
     setTimeout(() => setProgress(0, "Ready. Upload a file or record, then transcribe."), 800);
   }
+}
+
+// Map raw library/runtime errors to a human message. Big in-browser models
+// fail two ways: download drops (network) and out-of-memory at load/inference
+// (onnxruntime often throws a bare byte number like "180096440").
+function friendlyError(e) {
+  const raw = String(e?.message ?? e ?? "").trim();
+  const low = raw.toLowerCase();
+  if (/network error|failed to fetch|err_content_length|networkerror|load failed|fetch/.test(low)) {
+    return "Model download interrupted (network). Reconnect and retry — large models (large-v3 ~1.5GB) are most affected; a smaller model downloads faster.";
+  }
+  if (/out of memory|allocation failed|enlarge memory|memory access out of bounds|model execution|rangeerror|aborted|^\d+$/.test(low)) {
+    return "This model is too heavy to run in your browser (ran out of memory). Try whisper-large-v3-turbo, small, or base instead.";
+  }
+  if (/webgpu/.test(low)) return raw; // already a clear message
+  return "Transcription failed: " + (raw || "unknown error");
 }
 
 // ---------- Render + export ----------
