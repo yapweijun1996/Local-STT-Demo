@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Local STT Demo — in-browser Whisper</title>
+<!--
+  Local STT Demo — 100% in-browser speech-to-text.
+  Stack: Transformers.js (Apache-2.0) running Whisper ONNX (MIT) via WebGPU/WASM.
+  Audio decoding uses the browser's native Web Audio API — NO ffmpeg, so the
+  whole thing stays MIT-clean and zero-install. Nothing leaves your machine.
+-->
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1f242e;
+    --border: #2a313d;
+    --text: #e6e9ef;
+    --muted: #9aa4b2;
+    --accent: #5b9cff;
+    --accent-2: #3ad29f;
+    --danger: #ff6b6b;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header .tag {
+    font-size: 12px; color: var(--muted);
+    border: 1px solid var(--border); padding: 2px 8px; border-radius: 999px;
+  }
+  main { max-width: 920px; margin: 0 auto; padding: 24px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    margin-bottom: 18px;
+  }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  select, button {
+    font: inherit;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: #04121f; border-color: var(--accent); font-weight: 600; }
+  button.rec { background: var(--danger); color: #1a0606; border-color: var(--danger); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #drop {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+    text-align: center;
+    color: var(--muted);
+    transition: border-color .15s, background .15s;
+  }
+  #drop.over { border-color: var(--accent); background: rgba(91,156,255,.07); color: var(--text); }
+  #drop b { color: var(--text); }
+  canvas#wave {
+    display: block; width: 100%; height: 72px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 8px; margin-top: 14px;
+  }
+  .bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-top: 8px; }
+  .bar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .2s; }
+  #status { font-size: 13px; color: var(--muted); min-height: 18px; }
+  #status.err { color: var(--danger); }
+  #out {
+    white-space: pre-wrap;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    min-height: 80px;
+    font-size: 15px;
+  }
+  #out.live::after { content: "▋"; color: var(--accent); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .seg { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .seg .t { color: var(--accent); font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; padding-top: 2px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .hidden { display: none; }
+  a.dl { color: var(--accent-2); text-decoration: none; margin-right: 14px; font-size: 14px; }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .hint { font-size: 12px; color: var(--accent-2); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎙️ Local STT Demo</h1>
+  <span class="tag">in-browser Whisper · 100% local · MIT</span>
+  <span class="tag" id="backend">backend: …</span>
+</header>
+
+<main>
+  <!-- 1. Settings -->
+  <section class="panel">
+    <div class="row">
+      <label class="field">Model
+        <select id="model">
+          <option value="onnx-community/whisper-large-v3-turbo">whisper-large-v3-turbo (WebGPU only, best)</option>
+          <option value="Xenova/whisper-base">whisper-base (balanced)</option>
+          <option value="Xenova/whisper-small">whisper-small (slower)</option>
+          <option value="Xenova/whisper-tiny">whisper-tiny (fastest, rough)</option>
+        </select>
+      </label>
+      <label class="field">Language
+        <select id="lang">
+          <option value="auto">auto-detect</option>
+          <option value="en">English</option>
+          <option value="zh">Chinese</option>
+          <option value="ms">Malay</option>
+          <option value="ja">Japanese</option>
+          <option value="es">Spanish</option>
+        </select>
+      </label>
+      <label class="field">Compute
+        <select id="device">
+          <option value="auto">auto (WebGPU → WASM)</option>
+          <option value="wasm">WASM (CPU, most compatible)</option>
+          <option value="webgpu">WebGPU (Chrome/Edge)</option>
+        </select>
+      </label>
+    </div>
+    <p class="hint" style="margin:12px 0 0">Tip: for non-English audio, pick the language explicitly (e.g. Chinese) — small models guess poorly on auto-detect.</p>
+    <p class="muted" style="margin:6px 0 0">First run downloads the model into the browser cache (tiny ~40MB · base ~150MB · small ~480MB · turbo ~600MB, WebGPU only). After that it works fully offline.</p>
+  </section>
+
+  <!-- 2. Input -->
+  <section class="panel">
+    <div id="drop">
+      <p><b>Drop a file</b> or click to choose — <b>mp4 / mp3 / wav / m4a / ogg</b></p>
+      <p class="muted" id="fileinfo">no file selected</p>
+      <input id="file" type="file" accept="audio/*,video/mp4,video/*" class="hidden" />
+    </div>
+    <canvas id="wave" width="900" height="72"></canvas>
+    <div class="row" style="margin-top:14px">
+      <button id="micBtn">● Record mic</button>
+      <span class="pill" id="micState">idle</span>
+      <span style="flex:1"></span>
+      <button id="go" class="primary" disabled>Transcribe</button>
+    </div>
+  </section>
+
+  <!-- 3. Progress -->
+  <section class="panel">
+    <div id="status">Ready. Pick a file or record, then Transcribe.</div>
+    <div class="bar"><i id="prog"></i></div>
+  </section>
+
+  <!-- 4. Output -->
+  <section class="panel">
+    <div class="row" style="margin-bottom:10px">
+      <strong>Transcript</strong>
+      <span style="flex:1"></span>
+      <a href="#" id="dlTxt" class="dl hidden">⬇ download .txt</a>
+      <a href="#" id="dlSrt" class="dl hidden">⬇ download .srt</a>
+    </div>
+    <div id="out" class="muted">— output will appear here —</div>
+    <details style="margin-top:12px">
+      <summary class="muted" style="cursor:pointer">Timestamped segments</summary>
+      <div id="segs" class="muted" style="margin-top:8px">—</div>
+    </details>
+  </section>
+</main>
+
+<script type="module">
+import { pipeline, env, WhisperTextStreamer } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3";
+
+// --- WASM single-thread: avoids SharedArrayBuffer (needs COOP/COEP, impossible on file://)
+env.backends.onnx.wasm.numThreads = 1;
+
+const $ = (id) => document.getElementById(id);
+const ui = {
+  model: $("model"), lang: $("lang"), device: $("device"),
+  drop: $("drop"), file: $("file"), fileinfo: $("fileinfo"),
+  micBtn: $("micBtn"), micState: $("micState"),
+  go: $("go"), status: $("status"), prog: $("prog"),
+  out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"),
+  backend: $("backend"), wave: $("wave"),
+};
+
+let pcm = null;          // Float32Array @ 16kHz mono — the unified input to Whisper
+let inputName = "audio"; // for export filename
+let pipe = null;         // cached pipeline
+let pipeKey = "";        // model+device the cached pipeline was built with
+
+function setStatus(msg, isErr = false) {
+  ui.status.textContent = msg;
+  ui.status.classList.toggle("err", isErr);
+}
+function setProg(p) { ui.prog.style.width = Math.max(0, Math.min(100, p)) + "%"; }
+
+// ---------- Waveform rendering ----------
+const wctx = ui.wave.getContext("2d");
+function clearWave() { wctx.clearRect(0, 0, ui.wave.width, ui.wave.height); }
+// Static overview waveform from a Float32Array (min/max per pixel column).
+function drawStaticWave(data) {
+  const W = ui.wave.width, H = ui.wave.height, mid = H / 2;
+  clearWave();
+  wctx.fillStyle = "#5b9cff";
+  const step = Math.max(1, Math.floor(data.length / W));
+  for (let x = 0; x < W; x++) {
+    let min = 1, max = -1;
+    for (let i = 0; i < step; i++) {
+      const v = data[x * step + i] || 0;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    const y1 = mid + min * mid, y2 = mid + max * mid;
+    wctx.fillRect(x, y1, 1, Math.max(1, y2 - y1));
+  }
+}
+// Live oscilloscope while recording.
+let liveRAF = null;
+function drawLiveWave(analyser) {
+  const buf = new Uint8Array(analyser.fftSize);
+  const W = ui.wave.width, H = ui.wave.height;
+  const loop = () => {
+    analyser.getByteTimeDomainData(buf);
+    clearWave();
+    wctx.lineWidth = 2; wctx.strokeStyle = "#ff6b6b"; wctx.beginPath();
+    for (let i = 0; i < buf.length; i++) {
+      const x = (i / buf.length) * W;
+      const y = (buf[i] / 255) * H;
+      i === 0 ? wctx.moveTo(x, y) : wctx.lineTo(x, y);
+    }
+    wctx.stroke();
+    liveRAF = requestAnimationFrame(loop);
+  };
+  loop();
+}
+function stopLiveWave() { if (liveRAF) cancelAnimationFrame(liveRAF), liveRAF = null; }
+
+// ---------- Audio: any container → 16kHz mono Float32 (Web Audio, no ffmpeg) ----------
+async function blobToPCM16k(blob, name) {
+  setStatus("Decoding audio…");
+  const buf = await blob.arrayBuffer();
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ac = new AC();
+  let decoded;
+  try {
+    decoded = await ac.decodeAudioData(buf);
+  } catch (e) {
+    ac.close();
+    throw new Error("Could not decode audio. The file may have no audio track or use a codec this browser can't decode (try Chrome, or convert to wav/mp3).");
+  }
+  ac.close();
+
+  // mix down to mono
+  const chs = decoded.numberOfChannels;
+  let mono;
+  if (chs === 1) {
+    mono = decoded.getChannelData(0);
+  } else {
+    mono = new Float32Array(decoded.length);
+    for (let c = 0; c < chs; c++) {
+      const d = decoded.getChannelData(c);
+      for (let i = 0; i < d.length; i++) mono[i] += d[i] / chs;
+    }
+  }
+
+  // resample to 16kHz if needed
+  let out = mono;
+  if (decoded.sampleRate !== 16000) {
+    const len = Math.ceil(mono.length * 16000 / decoded.sampleRate);
+    const off = new OfflineAudioContext(1, len, 16000);
+    const b = off.createBuffer(1, mono.length, decoded.sampleRate);
+    b.copyToChannel(mono, 0);
+    const src = off.createBufferSource();
+    src.buffer = b; src.connect(off.destination); src.start();
+    const rendered = await off.startRendering();
+    out = rendered.getChannelData(0);
+  }
+  inputName = (name || "audio").replace(/\.[^.]+$/, "");
+  const secs = (out.length / 16000).toFixed(1);
+  drawStaticWave(out);
+  setStatus(`Audio ready: ${secs}s, 16kHz mono. Click Transcribe.`);
+  ui.go.disabled = false;
+  return out;
+}
+
+async function handleFile(f) {
+  if (!f) return;
+  ui.fileinfo.textContent = `${f.name} · ${(f.size / 1048576).toFixed(1)} MB`;
+  try { pcm = await blobToPCM16k(f, f.name); }
+  catch (err) { setStatus(err.message, true); ui.go.disabled = true; }
+}
+
+// ---------- File input ----------
+ui.drop.addEventListener("click", () => ui.file.click());
+ui.file.addEventListener("change", (e) => handleFile(e.target.files[0]));
+["dragover", "dragenter"].forEach(ev => ui.drop.addEventListener(ev, (e) => {
+  e.preventDefault(); ui.drop.classList.add("over");
+}));
+["dragleave"].forEach(ev => ui.drop.addEventListener(ev, (e) => {
+  e.preventDefault(); ui.drop.classList.remove("over");
+}));
+ui.drop.addEventListener("drop", (e) => {
+  e.preventDefault(); ui.drop.classList.remove("over");
+  handleFile(e.dataTransfer.files[0]);
+});
+
+// ---------- Mic ----------
+let mediaRec = null, chunks = [], micStream = null, micAC = null;
+ui.micBtn.addEventListener("click", async () => {
+  if (mediaRec && mediaRec.state === "recording") { mediaRec.stop(); return; }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    setStatus("Mic access denied or unavailable.", true);
+    return;
+  }
+  // live waveform
+  const AC = window.AudioContext || window.webkitAudioContext;
+  micAC = new AC();
+  const srcNode = micAC.createMediaStreamSource(micStream);
+  const analyser = micAC.createAnalyser();
+  analyser.fftSize = 1024;
+  srcNode.connect(analyser);
+  drawLiveWave(analyser);
+
+  chunks = [];
+  mediaRec = new MediaRecorder(micStream);
+  mediaRec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  mediaRec.onstop = async () => {
+    stopLiveWave();
+    micStream.getTracks().forEach(t => t.stop());
+    if (micAC) { micAC.close(); micAC = null; }
+    ui.micBtn.textContent = "● Record mic";
+    ui.micBtn.classList.remove("rec");
+    ui.micState.textContent = "processing…";
+    const blob = new Blob(chunks, { type: mediaRec.mimeType || "audio/webm" });
+    try { pcm = await blobToPCM16k(blob, "mic-recording"); ui.micState.textContent = "recorded ✓"; }
+    catch (err) { setStatus(err.message, true); ui.micState.textContent = "error"; }
+  };
+  mediaRec.start();
+  ui.micBtn.textContent = "■ Stop";
+  ui.micBtn.classList.add("rec");
+  ui.micState.textContent = "recording…";
+  setStatus("Recording… click Stop when done.");
+});
+
+// ---------- Model load (cached) ----------
+async function getPipeline() {
+  const model = ui.model.value;
+  let device = ui.device.value;
+  if (device === "auto") device = ("gpu" in navigator) ? "webgpu" : "wasm";
+
+  // large-v3-turbo is only practical on WebGPU (far too big/slow for CPU/WASM).
+  const isTurbo = model.includes("large-v3-turbo");
+  if (isTurbo && device !== "webgpu") {
+    throw new Error("whisper-large-v3-turbo needs WebGPU (Chrome/Edge). For WASM/CPU pick whisper-base or small instead.");
+  }
+
+  const key = model + "|" + device;
+  if (pipe && key === pipeKey) return pipe;
+
+  ui.backend.textContent = "backend: " + device;
+  setStatus(`Loading ${model} on ${device}… (first time downloads the model)`);
+  const opts = {
+    device,
+    progress_callback: (p) => {
+      if (p.status === "progress" && p.total) {
+        setProg(p.progress);
+        setStatus(`Downloading ${p.file?.split("/").pop() || "model"} — ${Math.round(p.progress)}%`);
+      } else if (p.status === "ready") {
+        setProg(0);
+      }
+    },
+  };
+  // WebGPU dtype: turbo uses fp16 encoder + q4 decoder (keeps the big model loadable);
+  // smaller models run full fp32. WASM defaults to its own quantized weights.
+  if (device === "webgpu") {
+    opts.dtype = isTurbo
+      ? { encoder_model: "fp16", decoder_model_merged: "q4" }
+      : { encoder_model: "fp32", decoder_model_merged: "fp32" };
+  }
+
+  try {
+    pipe = await pipeline("automatic-speech-recognition", model, opts);
+  } catch (e) {
+    if (device === "webgpu" && !isTurbo) {
+      setStatus("WebGPU failed, falling back to WASM…");
+      ui.backend.textContent = "backend: wasm (fallback)";
+      pipe = await pipeline("automatic-speech-recognition", model, {
+        device: "wasm", progress_callback: opts.progress_callback,
+      });
+    } else {
+      throw e;
+    }
+  }
+  pipeKey = key;
+  return pipe;
+}
+
+// ---------- Transcribe (streaming) ----------
+ui.go.addEventListener("click", async () => {
+  if (!pcm) { setStatus("No audio loaded.", true); return; }
+  ui.go.disabled = true;
+  ui.out.classList.remove("muted");
+  ui.out.classList.add("live");
+  ui.out.textContent = "";
+  ui.segs.textContent = "—";
+  ui.dlTxt.classList.add("hidden"); ui.dlSrt.classList.add("hidden");
+
+  const durationS = pcm.length / 16000;
+  const estChunks = Math.max(1, Math.ceil(durationS / 25)); // ~30s chunk minus stride overlap
+  let startedChunks = 0;
+
+  try {
+    const p = await getPipeline();
+    setStatus("Transcribing… (long audio is chunked automatically)");
+    setProg(8);
+    const lang = ui.lang.value;
+
+    // Live token streaming via WhisperTextStreamer (graceful fallback if unavailable).
+    let streamer = null;
+    let liveText = "";
+    try {
+      const time_precision =
+        p.processor.feature_extractor.config.chunk_length / p.model.config.max_source_positions;
+      streamer = new WhisperTextStreamer(p.tokenizer, {
+        time_precision,
+        on_chunk_start: () => {
+          startedChunks++;
+          setProg(8 + Math.min(87, (startedChunks / estChunks) * 87));
+          setStatus(`Transcribing chunk ${startedChunks}/${estChunks}…`);
+        },
+        callback_function: (text) => {
+          liveText += text;
+          ui.out.textContent = liveText;
+        },
+      });
+    } catch (_) { streamer = null; }
+
+    const t0 = performance.now();
+    const res = await p(pcm, {
+      return_timestamps: true,
+      chunk_length_s: 30,
+      stride_length_s: 5,
+      language: lang === "auto" ? undefined : lang,
+      task: "transcribe",
+      ...(streamer ? { streamer } : {}),
+    });
+    const secs = (performance.now() - t0) / 1000;
+    const rtf = durationS / secs; // ×realtime: >1 means faster than playback
+    window.__lastRun = { model: ui.model.value, backend: ui.backend.textContent,
+                         audioS: +durationS.toFixed(1), procS: +secs.toFixed(2), rtf: +rtf.toFixed(2) };
+    setProg(100);
+    renderResult(res);
+    setStatus(`Done ✓ in ${secs.toFixed(1)}s · ${rtf.toFixed(1)}× realtime · fully local, nothing uploaded.`);
+  } catch (e) {
+    console.error(e);
+    setStatus("Transcription failed: " + (e.message || e), true);
+  } finally {
+    ui.out.classList.remove("live");
+    ui.go.disabled = false;
+    setTimeout(() => setProg(0), 800);
+  }
+});
+
+// ---------- Render + export ----------
+function fmtTime(s, srt = false) {
+  if (s == null) s = 0;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60),
+        sec = Math.floor(s % 60), ms = Math.floor((s % 1) * 1000);
+  const pad = (n, w = 2) => String(n).padStart(w, "0");
+  return srt ? `${pad(h)}:${pad(m)}:${pad(sec)},${pad(ms, 3)}`
+             : `${pad(m)}:${pad(sec)}`;
+}
+function renderResult(res) {
+  const text = (res.text || "").trim();
+  ui.out.textContent = text || "(no speech detected)";
+
+  const chunks = res.chunks || [];
+  if (chunks.length) {
+    ui.segs.innerHTML = "";
+    chunks.forEach(c => {
+      const div = document.createElement("div");
+      div.className = "seg";
+      const [a, b] = c.timestamp || [0, 0];
+      div.innerHTML = `<span class="t">${fmtTime(a)}→${fmtTime(b)}</span><span>${escapeHtml(c.text.trim())}</span>`;
+      ui.segs.appendChild(div);
+    });
+  } else {
+    ui.segs.textContent = "(no segments)";
+  }
+
+  // .txt
+  makeDownload(ui.dlTxt, text + "\n", inputName + ".txt", "text/plain");
+  // .srt
+  let srt = "";
+  chunks.forEach((c, i) => {
+    const [a, b] = c.timestamp || [0, 0];
+    srt += `${i + 1}\n${fmtTime(a, true)} --> ${fmtTime(b ?? a, true)}\n${c.text.trim()}\n\n`;
+  });
+  if (chunks.length) makeDownload(ui.dlSrt, srt, inputName + ".srt", "text/plain");
+}
+function makeDownload(el, content, filename, mime) {
+  const blob = new Blob([content], { type: mime });
+  el.href = URL.createObjectURL(blob);
+  el.download = filename;
+  el.classList.remove("hidden");
+}
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+// backend hint + recommended default model on load
+const hasGPU = "gpu" in navigator;
+ui.backend.textContent = "backend: " + (hasGPU ? "webgpu available" : "wasm");
+// Strong machines (WebGPU) → turbo by default; otherwise balanced base.
+ui.model.value = hasGPU ? "onnx-community/whisper-large-v3-turbo" : "Xenova/whisper-base";
+</script>
+</body>
+</html>
