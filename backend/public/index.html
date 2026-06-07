@@ -130,6 +130,7 @@
           <option value="tiny">tiny (fastest)</option>
           <option value="large-v3-turbo">large-v3-turbo</option>
         </select>
+        <p id="modelInfo" class="muted" style="margin: 6px 0 0; font-size: 12px;"></p>
       </label>
       <label class="field">Language
         <input id="lang" type="text" value="auto" size="6" />
@@ -203,9 +204,27 @@ const ui = {
   drop: $("drop"), file: $("file"), fileinfo: $("fileinfo"),
   micBtn: $("micBtn"), micState: $("micState"), go: $("go"), waveMic: $("waveMic"),
   status: $("status"), statusValue: $("statusValue"), prog: $("prog"), stat: $("stat"),
+  modelInfo: $("modelInfo"),
   out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"),
   health: $("health"), themeToggle: $("themeToggle"), installBtn: $("installBtn"),
 };
+
+const MODEL_INFO = {
+  "large-v3": { size: "~2.6 GB", note: "highest quality (download + RAM heavy)" },
+  "large-v3-turbo": { size: "~1.5 GB", note: "strong quality/throughput balance" },
+  "base": { size: "~140 MB", note: "fast baseline" },
+  "small": { size: "~465 MB", note: "better quality than base" },
+  "tiny": { size: "~40 MB", note: "fastest; rough" },
+};
+function updateModelInfo() {
+  const info = MODEL_INFO[ui.model.value];
+  if (!ui.modelInfo) return;
+  if (!info) {
+    ui.modelInfo.textContent = "";
+    return;
+  }
+  ui.modelInfo.textContent = `download size: ${info.size} · ${info.note} · ${ui.useGpu.checked ? "GPU enabled" : "CPU fallback"}`;
+}
 
 let blobToSend = null, inputName = "audio";
 function setStatus(msg, isErr = false) {
@@ -271,6 +290,9 @@ function applyTheme(m) {
 ui.themeToggle.addEventListener("click", () => applyTheme(resolveTheme(themeMode) === "dark" ? "light" : "dark"));
 applyTheme(themeMode);
 themeQuery.addEventListener?.("change", () => { if (themeMode === "system") applyTheme("system"); });
+ui.model.addEventListener("change", updateModelInfo);
+ui.useGpu.addEventListener("change", updateModelInfo);
+updateModelInfo();
 
 // ---------- Health ----------
 async function checkHealth() {
@@ -284,7 +306,10 @@ async function checkHealth() {
       if (!ok && !/not installed/.test(o.textContent)) o.textContent += " (not installed)";
     });
     const firstOk = [...ui.model.options].find(o => !o.disabled);
-    if (firstOk) ui.model.value = firstOk.value;
+    if (firstOk) {
+      ui.model.value = firstOk.value;
+      updateModelInfo();
+    }
   } catch { ui.health.textContent = "API offline"; ui.health.className = "tag bad"; }
 }
 checkHealth();

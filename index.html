@@ -158,6 +158,7 @@
           <option value="Xenova/whisper-small">whisper-small (slower)</option>
           <option value="Xenova/whisper-tiny">whisper-tiny (fastest, rough)</option>
         </select>
+        <p id="modelInfo" class="muted" style="margin: 6px 0 0; font-size: 12px;"></p>
       </label>
       <label class="field">Language
         <select id="lang">
@@ -178,7 +179,7 @@
       </label>
     </div>
     <p class="hint" style="margin:12px 0 0">Tip: for non-English audio, pick the language explicitly — small models guess poorly on auto-detect.</p>
-    <p class="muted" style="margin:6px 0 0">First run downloads the model into the browser cache (tiny ~40MB · base ~150MB · small ~480MB · turbo ~600MB). Then it works offline.</p>
+    <p class="muted" style="margin:6px 0 0">First run downloads the model into the browser cache (tiny ~40MB · base ~150MB · small ~480MB · turbo ~600MB · large ~1.5GB). Then it works offline.</p>
   </section>
 
   <!-- Two inputs: Upload (manual) | Record (auto) -->
@@ -246,15 +247,53 @@ const ui = {
   micBtn: $("micBtn"), micState: $("micState"),
   go: $("go"), status: $("status"), statusValue: $("statusValue"), prog: $("prog"),
   out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"),
+  modelInfo: $("modelInfo"),
   backend: $("backend"), waveFile: $("waveFile"), waveMic: $("waveMic"),
   themeToggle: $("themeToggle"), installBtn: $("installBtn"),
 };
+
+const MODEL_INFO = {
+  "onnx-community/whisper-large-v3-turbo": {
+    size: "~600 MB",
+    note: "high quality; WebGPU only",
+  },
+  "Xenova/whisper-large": {
+    size: "~1.5 GB",
+    note: "highest quality; large memory + long load",
+  },
+  "Xenova/whisper-base": {
+    size: "~150 MB",
+    note: "balanced speed/quality",
+  },
+  "Xenova/whisper-small": {
+    size: "~480 MB",
+    note: "higher quality than base, slower",
+  },
+  "Xenova/whisper-tiny": {
+    size: "~40 MB",
+    note: "fastest; rough output",
+  },
+};
+
+function updateModelInfo() {
+  const info = MODEL_INFO[ui.model.value];
+  if (!ui.modelInfo) return;
+  if (!info) {
+    ui.modelInfo.textContent = "";
+    return;
+  }
+  const requiresGpu = /large-v3-turbo|\/whisper-large$/.test(ui.model.value);
+  ui.modelInfo.textContent = `download size: ${info.size} · ${info.note}${requiresGpu ? " (GPU/WebGPU required)" : ""}`;
+}
 
 // ---------- Theme (system / light / dark, persisted) ----------
 const THEME_KEY = "stt-browser-theme";
 const themeMeta = document.querySelector('meta[name="theme-color"]');
 const themeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 let themeMode = "system";
+
+ui.model.addEventListener("change", updateModelInfo);
+updateModelInfo();
 function getSavedTheme() {
   try { const s = localStorage.getItem(THEME_KEY); return (s === "light" || s === "dark" || s === "system") ? s : "system"; }
   catch { return "system"; }
