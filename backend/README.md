@@ -85,6 +85,28 @@ Registry keys: `tiny`, `base`, `small`, `large-v3-turbo`. Only installed models 
 selectable in the UI. `base` is a good default; `large-v3-turbo` is the most accurate
 (larger download + compute). Pass a domain `prompt` for proper nouns / SKUs / brands.
 
+## Benchmark (base vs. small vs. large-v3-turbo)
+
+Measured on this machine (Apple Silicon Mac) with whisper.cpp's bundled
+`samples/jfk.wav` (~11s clean English), via `npm run bench`. `real` is wall time;
+**×realtime** = audio seconds ÷ processing seconds (higher is faster).
+
+| Model | Size | CPU (`-ng`) | Metal (`WHISPER_USE_GPU=1`) | ×realtime (Metal) | Accuracy on this clip |
+|---|---:|---:|---:|---:|---|
+| base | 141 MB | 0.54s | 0.56s | ~20× | correct, missed a comma |
+| small | 465 MB | 1.56s | 1.07s | ~10× | correct, good punctuation |
+| large-v3-turbo | 1.5 GB | 4.10s | 2.09s | ~5× | correct, best punctuation |
+
+Takeaways:
+- All three are **far faster than real time** even on CPU — the backend's edge is native speed.
+- **Metal** helps the larger models most (turbo ~2× faster); on tiny clips `base` sees little
+  gain because Metal setup overhead dominates.
+- On clean English the accuracy gap is small; `large-v3-turbo` pulls ahead on **non-English,
+  accents, and proper nouns** (see the browser demo's Chinese benchmark in the root README).
+
+Reproduce with another file: `npm run bench -- /path/to/clip.wav` (or set `MODELS=...`,
+`LANGUAGE=...`, `WHISPER_USE_GPU=1`).
+
 ## Privacy
 
 The uploaded source and the intermediate 16 kHz wav are **always deleted** after each
