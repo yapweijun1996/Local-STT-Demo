@@ -99,6 +99,14 @@
   /* Two input cards side by side, stack on narrow screens */
   .inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
   @media (max-width: 720px) { .inputs { grid-template-columns: 1fr; } }
+  /* Mobile: settings selects go full-width so the long model names don't overflow */
+  @media (max-width: 560px) {
+    main { padding: 16px 14px 36px; }
+    .settings-row label.field { width: 100%; }
+    .settings-row label.field select { width: 100%; }
+    header h1 { font-size: 16px; }
+    header .tag { font-size: 11px; }
+  }
   .inputs .panel { margin: 0; display: flex; flex-direction: column; }
 
   #drop {
@@ -130,6 +138,14 @@
   }
   #status.err { color: var(--danger); }
   #status.err ~ #statusValue, #statusValue.err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+  /* Download stats: small chips that wrap on narrow screens (no long one-liner) */
+  .prog-stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .prog-stats:empty { display: none; }
+  .prog-stats span {
+    font-size: 11px; color: var(--muted); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
   #out { white-space: pre-wrap; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-height: 80px; font-size: 15px; }
   #out.live::after { content: "▋"; color: var(--accent); animation: blink 1s steps(2) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
@@ -158,7 +174,7 @@
   <!-- Settings -->
   <section class="panel">
     <h2 class="card-title">⚙️ Settings</h2>
-    <div class="row">
+    <div class="row settings-row">
       <label class="field">Model
         <select id="model">
           <option value="onnx-community/whisper-large-v3-turbo">whisper-large-v3-turbo (WebGPU only, high quality)</option>
@@ -225,6 +241,7 @@
       <div id="statusValue">0%</div>
     </div>
     <div class="bar"><i id="prog"></i></div>
+    <div id="progStats" class="prog-stats"></div>
   </section>
 
   <!-- Output -->
@@ -254,7 +271,7 @@ const ui = {
   model: $("model"), lang: $("lang"), device: $("device"),
   drop: $("drop"), file: $("file"), fileinfo: $("fileinfo"),
   micBtn: $("micBtn"), micState: $("micState"),
-  go: $("go"), status: $("status"), statusValue: $("statusValue"), prog: $("prog"),
+  go: $("go"), status: $("status"), statusValue: $("statusValue"), prog: $("prog"), progStats: $("progStats"),
   out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"),
   modelInfo: $("modelInfo"),
   backend: $("backend"), waveFile: $("waveFile"), waveMic: $("waveMic"),
@@ -353,57 +370,8 @@ function fmtSeconds(sec) {
   return `${h}h ${m % 60}m`;
 }
 
-function fmtSpeed(bps) {
-  if (!Number.isFinite(bps) || bps <= 0) return "";
-  return `· ${fmtBytes(bps)}/s`;
-}
 
 
-function buildDownloadStatus(file, progressPct, loadedBytes, totalBytes, startedAt) {
-  const safeProgress = Number.isFinite(progressPct) ? Math.max(0, Math.min(100, progressPct)) : 0;
-  const ratio = safeProgress / 100;
-  const { loaded: aggregateLoaded, knownTotal, hasKnown } = getDownloadTotals();
-  const aggregateTotal = Math.max(fileDownloadState.modelTotalBytes, hasKnown ? knownTotal : 0);
-
-  let parts = [`Downloading model files`];
-  parts.push(`current: ${file}`);
-
-  if (Number.isFinite(totalBytes) && totalBytes > 0) {
-    const l = Number.isFinite(loadedBytes) ? loadedBytes : (ratio * totalBytes);
-    parts.push(`${fmtBytes(l)} / ${fmtBytes(totalBytes)}`);
-  } else {
-    const hint = MODEL_INFO[ui.model.value]?.sizeBytes;
-    if (Number.isFinite(hint) && hint > 0) {
-      const estTotal = hint;
-      const estLoaded = Number.isFinite(loadedBytes) ? loadedBytes : (ratio * estTotal);
-      parts.push(`${fmtBytes(estLoaded)} / ~${fmtBytes(estTotal)} (est.)`);
-    } else if (Number.isFinite(loadedBytes) && loadedBytes > 0) {
-      parts.push(`${fmtBytes(loadedBytes)}`);
-    }
-  }
-
-  if (aggregateTotal > 0) {
-    const safeAgg = Math.max(0, Math.min(aggregateTotal, aggregateLoaded));
-    parts.push(`${fmtBytes(safeAgg)} / ${fmtBytes(aggregateTotal)} total`);
-  } else if (hasKnown && knownTotal > 0) {
-    const safeAgg = Math.max(0, Math.min(knownTotal, aggregateLoaded));
-    parts.push(`${fmtBytes(safeAgg)} / ${fmtBytes(knownTotal)} total`);
-  } else if (Number.isFinite(aggregateLoaded) && aggregateLoaded > 0) {
-    parts.push(`${fmtBytes(aggregateLoaded)} total`);
-  }
-
-  if (ratio > 0.02 && Number.isFinite(startedAt)) {
-    const elapsed = (performance.now() - startedAt) / 1000;
-    const eta = ratio >= 1 ? 0 : elapsed * (1 / ratio - 1);
-    parts.push(`ETA ${fmtSeconds(eta)}`);
-  }
-  if (fileDownloadState.speedBps > 0) {
-    const s = fmtSpeed(fileDownloadState.speedBps);
-    if (s) parts.push(`Speed ${s.replace(/^·\s*/, "")}`);
-  }
-
-  return `${parts.join(" · ")}`;
-}
 
 function updateDownloadState(file, p) {
   if (!fileDownloadState.startAt) fileDownloadState.startAt = performance.now();
@@ -519,6 +487,17 @@ function setProgress(p, label, isErr = false) {
   if (label) setStatus(label, isErr);
 }
 function setProg(p) { setProgress(p); }
+// Render download stats as small wrapping chips (or clear them). Friendly, mobile-safe.
+function setDownloadStats(chips) {
+  if (!ui.progStats) return;
+  ui.progStats.textContent = "";
+  for (const c of chips || []) {
+    if (!c) continue;
+    const el = document.createElement("span");
+    el.textContent = c;
+    ui.progStats.appendChild(el);
+  }
+}
 
 // ---------- Waveform ----------
 function clearWave(c) { c.getContext("2d").clearRect(0, 0, c.width, c.height); }
@@ -760,16 +739,21 @@ async function getPipeline() {
       const ratio = aggregateTotal > 0
         ? Math.min(100, (aggregateLoaded / aggregateTotal) * 100)
         : fileProgress;
-      const label = buildDownloadStatus(
-        file,
-        ratio,
-        state.fileLoaded,
-        state.fileTotal,
-        fileDownloadState.startAt,
-      );
-      setProgress(ratio, label);
+      // Short, human message — no raw filename, no dual totals.
+      setProgress(ratio, "Downloading model… (first run only, then it works offline)");
+      // Details as compact chips: downloaded/total, speed, and a sane ETA derived
+      // from remaining bytes ÷ current speed (consistent with the shown speed).
+      const chips = [];
+      const dl = aggregateTotal > 0 ? Math.min(aggregateTotal, aggregateLoaded) : aggregateLoaded;
+      chips.push(aggregateTotal > 0 ? `${fmtBytes(dl)} of ${fmtBytes(aggregateTotal)}` : fmtBytes(dl));
+      if (fileDownloadState.speedBps > 0) chips.push(`${fmtBytes(fileDownloadState.speedBps)}/s`);
+      if (fileDownloadState.speedBps > 0 && aggregateTotal > dl) {
+        chips.push(`~${fmtSeconds((aggregateTotal - dl) / fileDownloadState.speedBps)} left`);
+      }
+      setDownloadStats(chips);
     } else if (p.status === "ready") {
       setProgress(100, "Model loaded.");
+      setDownloadStats([]);
       resetDownloadState(model);
     }
   };
@@ -852,6 +836,7 @@ async function transcribe() {
   try {
     const p = await getPipeline();
     setStatus("Transcribing… (long audio is chunked automatically)");
+    setDownloadStats([]);
     setProgress(8, "Starting transcription...");
     const lang = ui.lang.value;
     const t0 = performance.now();
@@ -887,6 +872,7 @@ async function transcribe() {
     ui.micBtn.disabled = false;
     // Reset the bar + percent badge but KEEP the final status line (Done ✓ / error
     // message) so it doesn't vanish after a moment.
+    setDownloadStats([]);
     setTimeout(() => { ui.prog.style.width = "0%"; if (ui.statusValue) ui.statusValue.textContent = ""; }, 1200);
   }
 }
