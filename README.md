@@ -14,20 +14,37 @@ Powered by [Transformers.js](https://github.com/huggingface/transformers.js) run
 
 - 🎙️ **Two inputs** — drag-and-drop a file, or record live from the mic.
 - 🎞️ **Any common format** — mp4 (audio track), mp3, wav, m4a, ogg. Decoded natively in-browser.
-- 🧠 **Model choice** — `whisper-tiny` (fastest) · `whisper-base` · `whisper-small` (most accurate).
+- 🧠 **Model choice** — `whisper-tiny` (fastest), `whisper-base`, `whisper-small`,
+  `onnx-community/whisper-large-v3-turbo` (best accuracy, WebGPU-first).
 - ⚡ **WebGPU first**, automatic fallback to WASM (CPU) for Safari / Firefox.
 - 🌐 **Language** — auto-detect or pick (en / zh / ms / ja / es …).
 - ⏱️ **Timestamps** — per-segment timings, plus processing time + ×realtime after each run.
+- 🌓 **Theme toggle** — light/dark theme with preference saved locally and fallback to system setting.
 - ⬇️ **Export** — download `.txt` and `.srt` subtitles.
 - 🔒 **100% local** — model is cached in the browser; audio never uploaded.
 
 ## Quick start
 
 1. Open `index.html` in a browser (double-click — `file://` works). Chrome/Edge recommended for WebGPU.
-2. Pick a **model** (start with `tiny` to test, use `base`/`small` for real accuracy).
+2. Pick a **model** (start with `tiny` to test, use `base`/`small` for real accuracy,
+   and use `onnx-community/whisper-large-v3-turbo` on WebGPU when you want best accuracy).
 3. Pick the **language** (set it explicitly for non-English — e.g. `zh` for Chinese — small models guess poorly on `auto`).
 4. **Drop a file** or **Record mic**, then click **Transcribe**.
-5. First run downloads the model (tiny ~40MB · base ~150MB · small ~480MB); after that it works offline.
+5. First run downloads the model (tiny ~40MB · base ~150MB · small ~480MB · turbo ~600MB); after that it works offline.
+
+## Optional backend STT service
+
+For API-based use (ERP/agent pipelines, larger files, server-side control), use the bundled Node backend in [`backend/`](backend/).
+
+```bash
+cd backend
+npm install
+npm run setup          # builds whisper.cpp + downloads base/small models by default
+npm start              # serves http://localhost:8789
+```
+
+That backend exposes `/health` and `POST /api/transcribe` and accepts `base`, `small`, `tiny`, or `large-v3-turbo`
+model aliases (if models are installed).
 
 ## How it works
 
@@ -48,7 +65,7 @@ is handled at the IO boundary.
 ## Benchmark: base vs. large-v3-turbo
 
 Measured in-browser on this machine (Apple Silicon Mac, Chrome **WebGPU**), same
-20.8s Chinese clip (`sample-projects/test.mp4`), language set to `zh`. The UI shows
+20.8s Chinese clip, language set to `zh`. The UI shows
 processing time and **×realtime** (audio seconds ÷ processing seconds) after each run.
 
 | Model | Source | Processing | ×realtime | Accuracy on this clip |
@@ -63,18 +80,25 @@ than real time. (Numbers exclude the one-time model download; turbo is ~600MB on
 
 ## Notes & limits
 
-- **Accuracy is model-dependent.** `tiny` is rough; use `base`/`small` for real work. Whisper can hallucinate or repeat on noisy/silent audio.
+- **Accuracy is model-dependent.** `tiny` is rough; use `base`/`small` for real work; `large-v3-turbo`
+  is generally most accurate but heavy on disk/compute.
 - **Set the language** for non-English. On `auto`, small models sometimes mis-detect and translate.
 - **mp4 must have an audio track.** A video-only mp4 (or an exotic codec) will fail to decode — you'll get a clear error; try Chrome or convert to wav/mp3.
 - **WebGPU** is best in Chrome/Edge. Other browsers fall back to WASM (slower but works).
 - First model download is large; subsequent runs are cached and offline.
 
-## Comparison: this vs. a native whisper.cpp server
+## Two flavors in this repo
 
-This repo's [`sample-projects/`](sample-projects/) contains a Node + whisper.cpp + ffmpeg
-STT server (faster and more accurate, but requires installing Node, ffmpeg, and compiling
-whisper.cpp). This browser demo trades some speed/accuracy for **zero install, zero server,
-and an MIT-clean dependency tree** — ideal as a "double-click and it works" demo.
+| | Browser demo (this `index.html`) | Node backend ([`backend/`](backend/)) |
+|---|---|---|
+| Install | none — double-click | Node + ffmpeg + compile whisper.cpp |
+| Engine | Transformers.js (ONNX, WebGPU/WASM) | whisper.cpp (native, Metal/CPU) |
+| Best for | "double-click and it works" demo, full privacy | native speed, long files, ERP/agent integration |
+| Dependency tree | MIT-clean, no ffmpeg | MIT code; ffmpeg required at runtime |
+
+The browser demo trades some speed for **zero install, zero server**. The
+[`backend/`](backend/) is the server-side option when you need native speed or an HTTP API.
+See [backend/README.md](backend/README.md) for setup.
 
 ## License
 

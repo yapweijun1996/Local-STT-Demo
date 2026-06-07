@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#0f1115" />
 <title>Local STT Demo — in-browser Whisper</title>
 <!--
   Local STT Demo — 100% in-browser speech-to-text.
@@ -12,6 +13,7 @@
 -->
 <style>
   :root {
+    color-scheme: dark;
     --bg: #0f1115;
     --panel: #171a21;
     --panel-2: #1f242e;
@@ -22,6 +24,19 @@
     --accent-2: #3ad29f;
     --danger: #ff6b6b;
     --radius: 12px;
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f7fb;
+    --panel: #ffffff;
+    --panel-2: #f1f5f9;
+    --border: #d8dee8;
+    --text: #111827;
+    --muted: #4b5563;
+    --accent: #2563eb;
+    --accent-2: #16a34a;
+    --danger: #dc2626;
+    --radius: 12px;
+    color-scheme: light;
   }
   * { box-sizing: border-box; }
   body {
@@ -43,6 +58,19 @@
     font-size: 12px; color: var(--muted);
     border: 1px solid var(--border); padding: 2px 8px; border-radius: 999px;
   }
+  .theme-toggle {
+    margin-left: auto;
+    width: 38px;
+    height: 38px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0;
+    cursor: pointer;
+    background: var(--panel-2);
+    color: var(--text);
+  }
+  .theme-toggle:hover { filter: brightness(1.07); }
+  .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   main { max-width: 920px; margin: 0 auto; padding: 24px; }
   .panel {
     background: var(--panel);
@@ -109,6 +137,7 @@
   <h1>🎙️ Local STT Demo</h1>
   <span class="tag">in-browser Whisper · 100% local · MIT</span>
   <span class="tag" id="backend">backend: …</span>
+  <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle theme">☀️</button>
 </header>
 
 <main>
@@ -196,13 +225,64 @@ const ui = {
   micBtn: $("micBtn"), micState: $("micState"),
   go: $("go"), status: $("status"), prog: $("prog"),
   out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"),
-  backend: $("backend"), wave: $("wave"),
+  backend: $("backend"), wave: $("wave"), themeToggle: $("themeToggle"),
 };
+const THEME_KEY = "stt-browser-theme";
+const themeToggle = ui.themeToggle;
+const themeMeta = document.querySelector('meta[name="theme-color"]');
+const themeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+let themeMode = "system";
 
 let pcm = null;          // Float32Array @ 16kHz mono — the unified input to Whisper
 let inputName = "audio"; // for export filename
 let pipe = null;         // cached pipeline
 let pipeKey = "";        // model+device the cached pipeline was built with
+
+function getSavedTheme() {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    return saved === "light" || saved === "dark" || saved === "system" ? saved : "system";
+  } catch {
+    return "system";
+  }
+}
+
+function resolveTheme(mode) {
+  if (mode === "light") return "light";
+  if (mode === "dark") return "dark";
+  return themeQuery.matches ? "dark" : "light";
+}
+
+function applyTheme(mode) {
+  themeMode = mode;
+  const resolved = resolveTheme(mode);
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.style.colorScheme = resolved;
+  if (themeMeta) themeMeta.content = resolved === "dark" ? "#0f1115" : "#f5f7fb";
+  themeToggle.textContent = resolved === "dark" ? "☀️" : "🌙";
+  themeToggle.setAttribute("aria-label", resolved === "dark" ? "Switch to light theme" : "Switch to dark theme");
+  try {
+    localStorage.setItem(THEME_KEY, mode);
+  } catch {}
+}
+
+function toggleTheme() {
+  const current = resolveTheme(themeMode);
+  applyTheme(current === "dark" ? "light" : "dark");
+}
+
+function initTheme() {
+  themeMode = getSavedTheme();
+  applyTheme(themeMode);
+  if (themeQuery.addEventListener) {
+    themeQuery.addEventListener("change", () => {
+      if (themeMode === "system") applyTheme("system");
+    });
+  }
+}
+
+themeToggle.addEventListener("click", toggleTheme);
+initTheme();
 
 function setStatus(msg, isErr = false) {
   ui.status.textContent = msg;

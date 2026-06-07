@@ -1,0 +1,17 @@
+{
+  "name": "local-stt-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Node.js + whisper.cpp local STT backend (mp4/mp3/wav/m4a + mic).",
+  "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "setup:win": "powershell -ExecutionPolicy Bypass -File scripts/setup-win.ps1",
+    "start": "node src/server.js",
+    "bench": "bash scripts/benchmark.sh"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "multer": "^2.0.2"
+  }
+}

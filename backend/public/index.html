@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Local STT — Node + whisper.cpp backend</title>
+<!--
+  Client for the Node.js + whisper.cpp STT backend.
+  Upload mp4/mp3/wav/m4a/ogg or record from the mic; the file is POSTed to
+  /api/transcribe, converted to 16kHz mono by ffmpeg, and transcribed by
+  whisper-cli on the server. Audio is deleted after each request.
+-->
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel-2: #1f242e; --border: #2a313d;
+    --text: #e6e9ef; --muted: #9aa4b2; --accent: #5b9cff; --accent-2: #3ad29f;
+    --danger: #ff6b6b; --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 20px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .tag { font-size: 12px; color: var(--muted); border: 1px solid var(--border); padding: 2px 8px; border-radius: 999px; }
+  header .tag.ok { color: var(--accent-2); border-color: var(--accent-2); }
+  header .tag.bad { color: var(--danger); border-color: var(--danger); }
+  main { max-width: 920px; margin: 0 auto; padding: 24px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 18px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  select, button, input[type=text], textarea {
+    font: inherit; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px;
+  }
+  select, button { cursor: pointer; }
+  textarea { width: 100%; resize: vertical; min-height: 52px; }
+  button.primary { background: var(--accent); color: #04121f; border-color: var(--accent); font-weight: 600; }
+  button.rec { background: var(--danger); color: #1a0606; border-color: var(--danger); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #drop { border: 2px dashed var(--border); border-radius: var(--radius); padding: 28px; text-align: center; color: var(--muted); transition: border-color .15s, background .15s; }
+  #drop.over { border-color: var(--accent); background: rgba(91,156,255,.07); color: var(--text); }
+  #drop b { color: var(--text); }
+  .bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-top: 8px; }
+  .bar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .2s; }
+  .bar > i.indet { width: 35%; animation: slide 1.1s ease-in-out infinite; }
+  @keyframes slide { 0%{margin-left:-35%} 100%{margin-left:100%} }
+  #status { font-size: 13px; color: var(--muted); min-height: 18px; }
+  #status.err { color: var(--danger); }
+  #out { white-space: pre-wrap; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; min-height: 80px; font-size: 15px; }
+  .seg { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .seg .t { color: var(--accent); font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; padding-top: 2px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .hidden { display: none; }
+  a.dl { color: var(--accent-2); text-decoration: none; margin-right: 14px; font-size: 14px; }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .check { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🖥️ Local STT — Node + whisper.cpp</h1>
+  <span class="tag">server-side · 100% local · MIT</span>
+  <span class="tag" id="health">checking API…</span>
+</header>
+
+<main>
+  <!-- Settings -->
+  <section class="panel">
+    <div class="row">
+      <label class="field">Model
+        <select id="model">
+          <option value="base">base</option>
+          <option value="small">small</option>
+          <option value="tiny">tiny (fastest)</option>
+          <option value="large-v3-turbo">large-v3-turbo (best)</option>
+        </select>
+      </label>
+      <label class="field">Language
+        <input id="lang" type="text" value="auto" size="6" />
+      </label>
+      <label class="field">&nbsp;
+        <span class="check"><input type="checkbox" id="useGpu" /> Use GPU / Metal</span>
+      </label>
+    </div>
+    <label class="field" style="margin-top:12px">Prompt (optional — proper nouns / domain terms)
+      <textarea id="prompt" placeholder="e.g. ERP vocabulary: sales order, SKU A123, Acme Singapore. Leave blank for neutral transcription."></textarea>
+    </label>
+    <p class="muted" style="margin:8px 0 0">Models must be installed on the server (<code>npm run setup</code>). Pick one shown as installed by the API.</p>
+  </section>
+
+  <!-- Input -->
+  <section class="panel">
+    <div id="drop">
+      <p><b>Drop a file</b> or click to choose — <b>mp4 / mp3 / wav / m4a / ogg</b></p>
+      <p class="muted" id="fileinfo">no file selected</p>
+      <input id="file" type="file" accept="audio/*,video/mp4,video/*" class="hidden" />
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="micBtn">● Record mic</button>
+      <span class="pill" id="micState">idle</span>
+      <span style="flex:1"></span>
+      <button id="go" class="primary" disabled>Transcribe</button>
+    </div>
+  </section>
+
+  <!-- Progress -->
+  <section class="panel">
+    <div id="status">Ready. Pick a file or record, then Transcribe.</div>
+    <div class="bar"><i id="prog"></i></div>
+  </section>
+
+  <!-- Output -->
+  <section class="panel">
+    <div class="row" style="margin-bottom:10px">
+      <strong>Transcript</strong>
+      <span class="pill" id="stat"></span>
+      <span style="flex:1"></span>
+      <a href="#" id="dlTxt" class="dl hidden">⬇ download .txt</a>
+      <a href="#" id="dlSrt" class="dl hidden">⬇ download .srt</a>
+    </div>
+    <div id="out" class="muted">— output will appear here —</div>
+    <details style="margin-top:12px">
+      <summary class="muted" style="cursor:pointer">Timestamped segments</summary>
+      <div id="segs" class="muted" style="margin-top:8px">—</div>
+    </details>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const ui = {
+  model: $("model"), lang: $("lang"), useGpu: $("useGpu"), prompt: $("prompt"),
+  drop: $("drop"), file: $("file"), fileinfo: $("fileinfo"),
+  micBtn: $("micBtn"), micState: $("micState"), go: $("go"),
+  status: $("status"), prog: $("prog"), stat: $("stat"),
+  out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"), health: $("health"),
+};
+
+let blobToSend = null;   // File or Blob to upload
+let inputName = "audio";
+
+function setStatus(msg, isErr = false) { ui.status.textContent = msg; ui.status.classList.toggle("err", isErr); }
+function setBusy(on) { ui.prog.className = on ? "indet" : ""; ui.prog.style.width = on ? "" : "0%"; }
+
+// ---------- Health ----------
+async function checkHealth() {
+  try {
+    const r = await fetch("/health");
+    const p = await r.json();
+    const installed = Object.entries(p.installed || {}).filter(([, v]) => v).map(([k]) => k);
+    ui.health.textContent = p.ok ? `API ready · models: ${installed.join(", ") || "none"}` : "API up · no models — run npm run setup";
+    ui.health.className = "tag " + (p.ok ? "ok" : "bad");
+    // disable model options not installed
+    [...ui.model.options].forEach(o => {
+      const ok = p.installed?.[o.value];
+      o.disabled = !ok;
+      if (!ok) o.textContent = o.textContent.replace(/ \(not installed\)$/, "") + " (not installed)";
+    });
+    const firstOk = [...ui.model.options].find(o => !o.disabled);
+    if (firstOk) ui.model.value = firstOk.value;
+  } catch {
+    ui.health.textContent = "API offline";
+    ui.health.className = "tag bad";
+  }
+}
+checkHealth();
+
+// ---------- File input ----------
+function pickFile(f) {
+  if (!f) return;
+  blobToSend = f;
+  inputName = (f.name || "audio").replace(/\.[^.]+$/, "");
+  ui.fileinfo.textContent = `${f.name} · ${(f.size / 1048576).toFixed(1)} MB`;
+  ui.go.disabled = false;
+  setStatus("File ready. Click Transcribe.");
+}
+ui.drop.addEventListener("click", () => ui.file.click());
+ui.file.addEventListener("change", (e) => pickFile(e.target.files[0]));
+["dragover", "dragenter"].forEach(ev => ui.drop.addEventListener(ev, (e) => { e.preventDefault(); ui.drop.classList.add("over"); }));
+ui.drop.addEventListener("dragleave", (e) => { e.preventDefault(); ui.drop.classList.remove("over"); });
+ui.drop.addEventListener("drop", (e) => { e.preventDefault(); ui.drop.classList.remove("over"); pickFile(e.dataTransfer.files[0]); });
+
+// ---------- Mic ----------
+let mediaRec = null, chunks = [], micStream = null;
+ui.micBtn.addEventListener("click", async () => {
+  if (mediaRec && mediaRec.state === "recording") { mediaRec.stop(); return; }
+  try { micStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { setStatus("Mic access denied or unavailable.", true); return; }
+  chunks = [];
+  mediaRec = new MediaRecorder(micStream);
+  mediaRec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  mediaRec.onstop = () => {
+    micStream.getTracks().forEach(t => t.stop());
+    ui.micBtn.textContent = "● Record mic"; ui.micBtn.classList.remove("rec");
+    const type = mediaRec.mimeType || "audio/webm";
+    const ext = type.includes("ogg") ? "ogg" : "webm";
+    blobToSend = new Blob(chunks, { type });
+    blobToSend.name = `mic-recording.${ext}`;
+    inputName = "mic-recording";
+    ui.micState.textContent = "recorded ✓";
+    ui.fileinfo.textContent = `mic-recording.${ext} · ${(blobToSend.size / 1048576).toFixed(1)} MB`;
+    ui.go.disabled = false;
+    setStatus("Recording ready. Click Transcribe.");
+  };
+  mediaRec.start();
+  ui.micBtn.textContent = "■ Stop"; ui.micBtn.classList.add("rec");
+  ui.micState.textContent = "recording…";
+  setStatus("Recording… click Stop when done.");
+});
+
+// ---------- Transcribe (POST to backend) ----------
+ui.go.addEventListener("click", async () => {
+  if (!blobToSend) { setStatus("No audio loaded.", true); return; }
+  ui.go.disabled = true; setBusy(true);
+  ui.out.classList.remove("muted"); ui.out.textContent = "";
+  ui.segs.textContent = "—"; ui.stat.textContent = "";
+  ui.dlTxt.classList.add("hidden"); ui.dlSrt.classList.add("hidden");
+  setStatus("Uploading + transcribing on server…");
+
+  try {
+    const fd = new FormData();
+    const filename = blobToSend.name || "audio";
+    fd.append("audio", blobToSend, filename);
+    fd.append("model", ui.model.value);
+    fd.append("language", ui.lang.value.trim() || "auto");
+    fd.append("useGpu", ui.useGpu.checked ? "1" : "0");
+    if (ui.prompt.value.trim()) fd.append("prompt", ui.prompt.value.trim());
+
+    const r = await fetch("/api/transcribe", { method: "POST", body: fd });
+    const p = await r.json();
+    if (!r.ok) throw new Error(p.error || `HTTP ${r.status}`);
+    renderResult(p);
+    ui.stat.textContent = `${p.model} · ${p.language} · ${p.durationMs} ms`;
+    setStatus("Done ✓ — processed locally on the server, audio deleted after.");
+  } catch (e) {
+    setStatus("Failed: " + (e.message || e), true);
+  } finally {
+    ui.go.disabled = false; setBusy(false);
+  }
+});
+
+// ---------- Render + export ----------
+function fmtMs(ms, srt = false) {
+  if (ms == null) ms = 0;
+  const s = ms / 1000;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60), msr = Math.floor(ms % 1000);
+  const pad = (n, w = 2) => String(n).padStart(w, "0");
+  return srt ? `${pad(h)}:${pad(m)}:${pad(sec)},${pad(msr, 3)}` : `${pad(m)}:${pad(sec)}`;
+}
+function renderResult(p) {
+  const text = (p.text || "").trim();
+  ui.out.textContent = text || "(no speech detected)";
+  const segs = p.segments || [];
+  if (segs.length) {
+    ui.segs.innerHTML = "";
+    segs.forEach(c => {
+      const div = document.createElement("div");
+      div.className = "seg";
+      div.innerHTML = `<span class="t">${fmtMs(c.startMs)}→${fmtMs(c.endMs)}</span><span></span>`;
+      div.children[1].textContent = (c.text || "").trim();
+      ui.segs.appendChild(div);
+    });
+  } else { ui.segs.textContent = "(no segments)"; }
+
+  makeDownload(ui.dlTxt, text + "\n", inputName + ".txt");
+  let srt = "";
+  segs.forEach((c, i) => { srt += `${i + 1}\n${fmtMs(c.startMs, true)} --> ${fmtMs(c.endMs ?? c.startMs, true)}\n${(c.text || "").trim()}\n\n`; });
+  if (segs.length) makeDownload(ui.dlSrt, srt, inputName + ".srt");
+}
+function makeDownload(el, content, filename) {
+  const blob = new Blob([content], { type: "text/plain" });
+  el.href = URL.createObjectURL(blob); el.download = filename; el.classList.remove("hidden");
+}
+</script>
+</body>
+</html>
