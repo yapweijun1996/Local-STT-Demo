@@ -411,9 +411,13 @@ async function getPipeline() {
 
 // ---------- Transcribe (shared by file button + mic auto) ----------
 ui.go.addEventListener("click", transcribe);
+let transcribing = false;
 async function transcribe() {
+  if (transcribing) return;              // guard double-submit (button + mic auto)
   if (!pcm) { setStatus("No audio loaded.", true); return; }
-  ui.go.disabled = true;
+  transcribing = true;
+  ui.go.disabled = true; ui.go.textContent = "Transcribing…";
+  ui.micBtn.disabled = true;
   ui.out.classList.remove("muted"); ui.out.classList.add("live"); ui.out.textContent = "";
   ui.segs.textContent = "—";
   ui.dlTxt.classList.add("hidden"); ui.dlSrt.classList.add("hidden");
@@ -450,8 +454,10 @@ async function transcribe() {
     console.error(e);
     setStatus("Transcription failed: " + (e.message || e), true);
   } finally {
+    transcribing = false;
     ui.out.classList.remove("live");
-    ui.go.disabled = false;
+    ui.go.disabled = false; ui.go.textContent = "Transcribe file";
+    ui.micBtn.disabled = false;
     setTimeout(() => setProg(0), 800);
   }
 }

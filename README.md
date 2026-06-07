@@ -21,7 +21,30 @@ Powered by [Transformers.js](https://github.com/huggingface/transformers.js) run
 - ⏱️ **Timestamps** — per-segment timings, plus processing time + ×realtime after each run.
 - 🌓 **Theme toggle** — light/dark theme with preference saved locally and fallback to system setting.
 - ⬇️ **Export** — download `.txt` and `.srt` subtitles.
+- 📲 **Installable PWA** — add to home screen / desktop; UI shell works offline.
 - 🔒 **100% local** — model is cached in the browser; audio never uploaded.
+
+## Install as an app (PWA)
+
+When served over **https** (e.g. GitHub Pages) or **http://localhost**, this demo is an
+installable Progressive Web App: a service worker caches the UI shell for offline use and the
+browser offers an **Install** button (also in the header). It follows the standard PWA setup —
+`manifest.webmanifest`, `sw.js`, `offline.html`, and `any` + `maskable` icons.
+
+> ⚠️ **`file://` can't run a service worker.** Double-clicking `index.html` still works for
+> transcription, but to *install* it as a PWA you must serve it over http(s). Quick local serve:
+> `python3 -m http.server` then open `http://localhost:8000/`. Or use the GitHub Pages deploy below.
+
+The service worker never touches the model downloads (cross-origin CDN/Hugging Face) or any API
+call — those always go to the network, so transcription is unaffected by caching.
+
+### Deploy to GitHub Pages
+
+A workflow at [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) publishes this
+browser demo to GitHub Pages on every push to `main`. One-time setup: **Settings → Pages →
+Build and deployment → Source = "GitHub Actions"**. After it runs, the demo is live (and
+installable) at `https://yapweijun1996.github.io/Local-STT-Demo/`. The Node backend is not
+deployed there — it needs a server; run it locally (see [`backend/`](backend/)).
 
 ## Quick start
 
