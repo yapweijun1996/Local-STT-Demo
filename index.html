@@ -152,7 +152,8 @@
     <div class="row">
       <label class="field">Model
         <select id="model">
-          <option value="onnx-community/whisper-large-v3-turbo">whisper-large-v3-turbo (WebGPU only, best)</option>
+          <option value="onnx-community/whisper-large-v3-turbo">whisper-large-v3-turbo (WebGPU only, high quality)</option>
+          <option value="Xenova/whisper-large">whisper-large (WebGPU/desktop, highest quality)</option>
           <option value="Xenova/whisper-base">whisper-base (balanced)</option>
           <option value="Xenova/whisper-small">whisper-small (slower)</option>
           <option value="Xenova/whisper-tiny">whisper-tiny (fastest, rough)</option>
@@ -413,8 +414,10 @@ async function getPipeline() {
   const model = ui.model.value;
   let device = ui.device.value;
   if (device === "auto") device = ("gpu" in navigator) ? "webgpu" : "wasm";
-  const isTurbo = model.includes("large-v3-turbo");
-  if (isTurbo && device !== "webgpu") throw new Error("whisper-large-v3-turbo needs WebGPU (Chrome/Edge). For WASM/CPU pick base or small.");
+  const needsWebGPU = /large-v3-turbo|\/whisper-large$/.test(model);
+  if (needsWebGPU && device !== "webgpu") {
+    throw new Error("This model needs WebGPU (Chrome/Edge). For WASM/CPU pick base or small.");
+  }
   const key = model + "|" + device;
   if (pipe && key === pipeKey) return pipe;
   ui.backend.textContent = "backend: " + device;
@@ -430,11 +433,15 @@ async function getPipeline() {
       }
     },
   };
-  if (device === "webgpu") opts.dtype = isTurbo ? { encoder_model: "fp16", decoder_model_merged: "q4" } : { encoder_model: "fp32", decoder_model_merged: "fp32" };
+  if (device === "webgpu") {
+    opts.dtype = /large-v3-turbo/.test(model)
+      ? { encoder_model: "fp16", decoder_model_merged: "q4" }
+      : { encoder_model: "fp32", decoder_model_merged: "fp32" };
+  }
   try {
     pipe = await pipeline("automatic-speech-recognition", model, opts);
   } catch (e) {
-    if (device === "webgpu" && !isTurbo) {
+    if (device === "webgpu" && !needsWebGPU) {
       setStatus("WebGPU failed, falling back to WASM…");
       ui.backend.textContent = "backend: wasm (fallback)";
       pipe = await pipeline("automatic-speech-recognition", model, { device: "wasm", progress_callback: opts.progress_callback });

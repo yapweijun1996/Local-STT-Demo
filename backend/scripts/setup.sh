@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WHISPER_DIR="${WHISPER_CPP_DIR:-$ROOT_DIR/vendor/whisper.cpp}"
-# Default models. Add "large-v3-turbo" for best accuracy:
-#   WHISPER_MODELS="base small large-v3-turbo" npm run setup
+# Default models. Add "large-v3" or "large-v3-turbo" for best accuracy:
+#   WHISPER_MODELS="base small large-v3" npm run setup
 MODEL_LIST="${WHISPER_MODELS:-base small}"
 
 if ! command -v git >/dev/null 2>&1; then

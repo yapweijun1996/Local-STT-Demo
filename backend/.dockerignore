@@ -1,0 +1,9 @@
+node_modules
+vendor
+uploads/*
+transcripts/*
+!uploads/.gitkeep
+!transcripts/.gitkeep
+.git
+.env
+.DS_Store

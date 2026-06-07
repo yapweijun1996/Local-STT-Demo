@@ -15,7 +15,8 @@ Powered by [Transformers.js](https://github.com/huggingface/transformers.js) run
 - 🎙️ **Two inputs** — drag-and-drop a file, or record live from the mic.
 - 🎞️ **Any common format** — mp4 (audio track), mp3, wav, m4a, ogg. Decoded natively in-browser.
 - 🧠 **Model choice** — `whisper-tiny` (fastest), `whisper-base`, `whisper-small`,
-  `onnx-community/whisper-large-v3-turbo` (best accuracy, WebGPU-first).
+  `onnx-community/whisper-large-v3-turbo` (high quality, WebGPU-first),
+  `Xenova/whisper-large` (highest quality, heavier).
 - ⚡ **WebGPU first**, automatic fallback to WASM (CPU) for Safari / Firefox.
 - 🌐 **Language** — auto-detect or pick (en / zh / ms / ja / es …).
 - ⏱️ **Timestamps** — per-segment timings, plus processing time + ×realtime after each run.
@@ -50,10 +51,11 @@ deployed there — it needs a server; run it locally (see [`backend/`](backend/)
 
 1. Open `index.html` in a browser (double-click — `file://` works). Chrome/Edge recommended for WebGPU.
 2. Pick a **model** (start with `tiny` to test, use `base`/`small` for real accuracy,
-   and use `onnx-community/whisper-large-v3-turbo` on WebGPU when you want best accuracy).
+   use `whisper-large-v3-turbo` for higher quality, and `Xenova/whisper-large` for best
+   accuracy when you have enough VRAM).
 3. Pick the **language** (set it explicitly for non-English — e.g. `zh` for Chinese — small models guess poorly on `auto`).
 4. **Drop a file** or **Record mic**, then click **Transcribe**.
-5. First run downloads the model (tiny ~40MB · base ~150MB · small ~480MB · turbo ~600MB); after that it works offline.
+5. First run downloads the model (tiny ~40MB · base ~150MB · small ~480MB · turbo ~600MB · large ~1.5GB); after that it works offline.
 
 ## Optional backend STT service
 
@@ -66,8 +68,8 @@ npm run setup          # builds whisper.cpp + downloads base/small models by def
 npm start              # serves http://localhost:8789
 ```
 
-That backend exposes `/health` and `POST /api/transcribe` and accepts `base`, `small`, `tiny`, or `large-v3-turbo`
-model aliases (if models are installed).
+That backend exposes `/health` and `POST /api/transcribe` and accepts `base`, `small`, `tiny`,
+`large-v3-turbo`, or `large-v3` (if those model files are installed) as model aliases.
 
 ## Pushing to GitHub (important)
 
@@ -113,8 +115,9 @@ than real time. (Numbers exclude the one-time model download; turbo is ~600MB on
 
 ## Notes & limits
 
-- **Accuracy is model-dependent.** `tiny` is rough; use `base`/`small` for real work; `large-v3-turbo`
-  is generally most accurate but heavy on disk/compute.
+- **Accuracy is model-dependent.** `tiny` is rough; use `base`/`small` for real work.
+  `large-v3-turbo` is high quality and a good default for non-English; `whisper-large` is the
+  highest quality option when memory and latency allow.
 - **Set the language** for non-English. On `auto`, small models sometimes mis-detect and translate.
 - **mp4 must have an audio track.** A video-only mp4 (or an exotic codec) will fail to decode — you'll get a clear error; try Chrome or convert to wav/mp3.
 - **WebGPU** is best in Chrome/Edge. Other browsers fall back to WASM (slower but works).

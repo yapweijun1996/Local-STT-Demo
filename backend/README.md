@@ -37,7 +37,7 @@ npm run setup          # clones + builds whisper.cpp, downloads base + small mod
 Want the most accurate model too? Download it during setup:
 
 ```bash
-WHISPER_MODELS="base small large-v3-turbo" npm run setup
+WHISPER_MODELS="base small large-v3" npm run setup
 ```
 
 Windows: `npm run setup:win`.
@@ -87,6 +87,33 @@ curl -sS -X POST http://localhost:8789/api/transcribe \
   | jq '{text,language,model,durationMs,segments}'
 ```
 
+## Docker
+
+Run the whole backend (Node + whisper.cpp + ffmpeg + web UI) in one container — no
+local toolchain needed. From the repo root:
+
+```bash
+docker compose up --build
+# → http://localhost:8789/
+```
+
+- whisper.cpp is **compiled into the image** (CPU build); ffmpeg is included.
+- Models are **not baked in** — they download into a named volume (`stt-models`) on
+  first start, controlled by `WHISPER_MODELS` (default `base`). They persist across restarts.
+- Want more accuracy? Edit `WHISPER_MODELS` in `docker-compose.yml`
+  (e.g. `"base small large-v3-turbo"` or `"base small large-v3"`) and restart;
+  only missing models download.
+- GPU/Metal isn't available in the CPU image (`WHISPER_USE_GPU=0`). For Apple Metal /
+  NVIDIA acceleration, run natively (`npm run setup && npm start`).
+
+Without compose:
+
+```bash
+docker build -t local-stt-backend ./backend
+docker run --rm -p 8789:8789 -e WHISPER_MODELS="base" \
+  -v stt-models:/app/backend/vendor/whisper.cpp/models local-stt-backend
+```
+
 ## Configuration (env vars)
 
 - `PORT` — API port, default `8789`.
@@ -100,9 +127,9 @@ curl -sS -X POST http://localhost:8789/api/transcribe \
 
 ## Models
 
-Registry keys: `tiny`, `base`, `small`, `large-v3-turbo`. Only installed models are
-selectable in the UI. `base` is a good default; `large-v3-turbo` is the most accurate
-(larger download + compute). Pass a domain `prompt` for proper nouns / SKUs / brands.
+Registry keys: `tiny`, `base`, `small`, `large-v3`, `large-v3-turbo`. Only installed models are
+selectable in the UI. `base` is a good default. `large-v3` is the highest-quality option,
+while `large-v3-turbo` is a better speed/quality tradeoff.
 
 ## Benchmark (base vs. small vs. large-v3-turbo)
 
@@ -114,14 +141,15 @@ Measured on this machine (Apple Silicon Mac) with whisper.cpp's bundled
 |---|---:|---:|---:|---:|---|
 | base | 141 MB | 0.54s | 0.56s | ~20× | correct, missed a comma |
 | small | 465 MB | 1.56s | 1.07s | ~10× | correct, good punctuation |
+| large-v3 | 2.6 GB | 5.8s | 2.73s | ~4× | best quality |
 | large-v3-turbo | 1.5 GB | 4.10s | 2.09s | ~5× | correct, best punctuation |
 
 Takeaways:
 - All three are **far faster than real time** even on CPU — the backend's edge is native speed.
 - **Metal** helps the larger models most (turbo ~2× faster); on tiny clips `base` sees little
   gain because Metal setup overhead dominates.
-- On clean English the accuracy gap is small; `large-v3-turbo` pulls ahead on **non-English,
-  accents, and proper nouns** (see the browser demo's Chinese benchmark in the root README).
+- On clean English the gap is smaller, and `large-v3` is typically best for raw quality,
+  with `large-v3-turbo` usually winning for practical throughput and accuracy balance.
 
 Reproduce with another file: `npm run bench -- /path/to/clip.wav` (or set `MODELS=...`,
 `LANGUAGE=...`, `WHISPER_USE_GPU=1`).

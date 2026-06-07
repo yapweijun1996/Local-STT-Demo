@@ -21,6 +21,7 @@ const modelRegistry = {
   tiny: path.join(modelsDir, "ggml-tiny.bin"),
   base: path.join(modelsDir, "ggml-base.bin"),
   small: path.join(modelsDir, "ggml-small.bin"),
+  "large-v3": path.join(modelsDir, "ggml-large-v3.bin"),
   "large-v3-turbo": path.join(modelsDir, "ggml-large-v3-turbo.bin")
 };
 const uploadDir = process.env.UPLOAD_DIR ?? path.join(rootDir, "uploads");
