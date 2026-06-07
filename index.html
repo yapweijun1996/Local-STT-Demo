@@ -204,7 +204,7 @@
       </label>
     </div>
     <p class="hint" style="margin:12px 0 0">Tip: for non-English audio, pick the language explicitly — small models guess poorly on auto-detect.</p>
-    <p class="muted" style="margin:6px 0 0">First run downloads the model into the browser cache (tiny ~40MB · base ~150MB · small ~480MB · turbo ~1.2GB · large ~1.5GB). Then it works offline.</p>
+    <p class="muted" style="margin:6px 0 0">First run downloads the model into the browser cache — on WebGPU: tiny ~145MB · base ~280MB · small ~920MB · turbo ~1.5GB · large ~2.0GB (WASM downloads smaller quantized weights). Then it works offline.</p>
   </section>
 
   <!-- Two inputs: Upload (manual) | Record (auto) -->
@@ -278,30 +278,33 @@ const ui = {
   themeToggle: $("themeToggle"), installBtn: $("installBtn"),
 };
 
+// sizeBytes/sizeLabel = actual files downloaded on the default WebGPU path (measured
+// from the HF repo): tiny/base/small use fp32; turbo uses fp16 enc + q4 dec; large-v3
+// uses fp16 enc + q8 dec. (On WASM/CPU the weights are quantized and smaller.)
 const MODEL_INFO = {
   "onnx-community/whisper-large-v3-turbo": {
-    sizeLabel: "~1.2 GB",
-    sizeBytes: 1200 * 1024 * 1024,
+    sizeLabel: "~1.5 GB",
+    sizeBytes: 1534 * 1024 * 1024,
     note: "high quality, runs well in-browser; WebGPU only",
   },
   "Xenova/whisper-large-v3": {
-    sizeLabel: "~1.5 GB",
-    sizeBytes: 1500 * 1024 * 1024,
+    sizeLabel: "~2.0 GB",
+    sizeBytes: 2088 * 1024 * 1024,
     note: "highest quality, but heavy — may exceed browser memory and fail; if so, use turbo",
   },
   "Xenova/whisper-base": {
-    sizeLabel: "~150 MB",
-    sizeBytes: 150 * 1024 * 1024,
+    sizeLabel: "~280 MB",
+    sizeBytes: 278 * 1024 * 1024,
     note: "balanced speed/quality",
   },
   "Xenova/whisper-small": {
-    sizeLabel: "~480 MB",
-    sizeBytes: 480 * 1024 * 1024,
+    sizeLabel: "~920 MB",
+    sizeBytes: 923 * 1024 * 1024,
     note: "higher quality than base, slower",
   },
   "Xenova/whisper-tiny": {
-    sizeLabel: "~40 MB",
-    sizeBytes: 40 * 1024 * 1024,
+    sizeLabel: "~145 MB",
+    sizeBytes: 144 * 1024 * 1024,
     note: "fastest; rough output",
   },
 };

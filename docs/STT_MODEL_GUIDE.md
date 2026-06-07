@@ -4,13 +4,16 @@ _Updated 2026-06-07._ This repo has two transcription paths; pick the model per 
 
 ## Browser demo (Transformers.js + ONNX, WebGPU/WASM)
 
-| Model (dropdown value) | Size (download) | Use it for | Notes |
+Sizes below are the **actual download on the default WebGPU path** (tiny/base/small = fp32;
+turbo = fp16 + q4; large-v3 = fp16 + q8). On WASM/CPU the weights are quantized and smaller.
+
+| Model (dropdown value) | Size (WebGPU) | Use it for | Notes |
 |---|---|---|---|
-| `Xenova/whisper-tiny` | ~40 MB | smoke-testing | rough output |
-| `Xenova/whisper-base` | ~150 MB | fast, decent English | good default for WASM/no-GPU |
-| `Xenova/whisper-small` | ~480 MB | better accuracy | slower |
-| `onnx-community/whisper-large-v3-turbo` | ~1.2 GB | **recommended top-tier** | high quality **and actually runs in-browser**; WebGPU only |
-| `Xenova/whisper-large-v3` | ~1.5 GB | absolute max quality | ⚠️ often **runs out of memory at inference** in-browser — see below |
+| `Xenova/whisper-tiny` | ~145 MB | smoke-testing | rough output |
+| `Xenova/whisper-base` | ~280 MB | fast, decent English | good default |
+| `Xenova/whisper-small` | ~920 MB | better accuracy | slower |
+| `onnx-community/whisper-large-v3-turbo` | ~1.5 GB | **recommended top-tier** | high quality **and actually runs in-browser**; WebGPU only |
+| `Xenova/whisper-large-v3` | ~2.0 GB | absolute max quality | ⚠️ often **runs out of memory at inference** in-browser — see below |
 
 ### ⚠️ Why `whisper-large-v3` usually fails in the browser
 

@@ -74,6 +74,13 @@
   button.big { min-height: 48px; width: 100%; font-weight: 600; }
   .inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
   @media (max-width: 720px) { .inputs { grid-template-columns: 1fr; } }
+  @media (max-width: 560px) {
+    main { padding: 16px 14px 36px; }
+    .settings-row label.field { width: 100%; }
+    .settings-row label.field select, .settings-row label.field input[type=text] { width: 100%; }
+    header h1 { font-size: 16px; }
+    header .tag { font-size: 11px; }
+  }
   .inputs .panel { margin: 0; display: flex; flex-direction: column; }
   #drop { border: 2px dashed var(--border); border-radius: var(--radius); padding: 26px 18px; text-align: center; color: var(--muted); transition: border-color .15s, background .15s; cursor: pointer; }
   #drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); }
@@ -94,6 +101,13 @@
   }
   #status.err { color: var(--danger); }
   #status.err ~ #statusValue, #statusValue.err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+  .prog-stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .prog-stats:empty { display: none; }
+  .prog-stats span {
+    font-size: 11px; color: var(--muted); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
   #out { white-space: pre-wrap; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-height: 80px; font-size: 15px; }
   .seg { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border); }
   .seg .t { color: var(--accent); font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; padding-top: 2px; }
@@ -121,7 +135,7 @@
   <!-- Settings -->
   <section class="panel">
     <h2 class="card-title">⚙️ Settings</h2>
-    <div class="row">
+    <div class="row settings-row">
       <label class="field">Model
         <select id="model">
           <option value="large-v3">large-v3 (best)</option>
@@ -178,6 +192,7 @@
       <div id="statusValue">0%</div>
     </div>
     <div class="bar"><i id="prog"></i></div>
+    <div id="progStats" class="prog-stats"></div>
   </section>
 
   <!-- Output -->
@@ -203,7 +218,7 @@ const ui = {
   model: $("model"), lang: $("lang"), useGpu: $("useGpu"), prompt: $("prompt"),
   drop: $("drop"), file: $("file"), fileinfo: $("fileinfo"),
   micBtn: $("micBtn"), micState: $("micState"), go: $("go"), waveMic: $("waveMic"),
-  status: $("status"), statusValue: $("statusValue"), prog: $("prog"), stat: $("stat"),
+  status: $("status"), statusValue: $("statusValue"), prog: $("prog"), stat: $("stat"), progStats: $("progStats"),
   modelInfo: $("modelInfo"),
   out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"),
   health: $("health"), themeToggle: $("themeToggle"), installBtn: $("installBtn"),
@@ -250,6 +265,22 @@ function setProgress(p, label, isErr = false) {
 function setBusy(on) {
   ui.prog.classList.toggle("indet", !!on);
   ui.statusValue.textContent = on ? "…%" : "0%";
+}
+function fmtBytes(bytes) {
+  const u = ["B", "KB", "MB", "GB"]; let b = Number(bytes);
+  if (!Number.isFinite(b) || b <= 0) return "--";
+  let i = 0; while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return `${b.toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
+}
+function fmtSeconds(sec) {
+  const s = Math.max(0, Math.round(sec));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60); return `${m}m ${s % 60}s`;
+}
+function setDownloadStats(chips) {
+  if (!ui.progStats) return;
+  ui.progStats.textContent = "";
+  for (const c of chips || []) { if (!c) continue; const el = document.createElement("span"); el.textContent = c; ui.progStats.appendChild(el); }
 }
 
 // ---------- Live mic waveform ----------
@@ -374,7 +405,7 @@ async function transcribe() {
   ui.out.classList.remove("muted"); ui.out.textContent = "";
   ui.segs.textContent = "—"; ui.stat.textContent = "";
   ui.dlTxt.classList.add("hidden"); ui.dlSrt.classList.add("hidden");
-  setStatus("Uploading + transcribing on server…");
+  setProgress(0, "Uploading audio…");
   try {
     const fd = new FormData();
     fd.append("audio", blobToSend, blobToSend.name || "audio");
@@ -382,9 +413,23 @@ async function transcribe() {
     fd.append("language", ui.lang.value.trim() || "auto");
     fd.append("useGpu", ui.useGpu.checked ? "1" : "0");
     if (ui.prompt.value.trim()) fd.append("prompt", ui.prompt.value.trim());
-    const r = await fetch("/api/transcribe", { method: "POST", body: fd });
-    const p = await r.json();
-    if (!r.ok) throw new Error(p.error || `HTTP ${r.status}`);
+
+    // Real upload progress + chips, then an indeterminate "server is transcribing" phase.
+    let lastT = performance.now(), lastLoaded = 0, speed = 0;
+    const p = await postTranscribe(fd, (loaded, total) => {
+      if (loaded < 0) {                          // upload finished → server working
+        setDownloadStats([]); setBusy(true);
+        setStatus("Transcribing on server…");
+        return;
+      }
+      const now = performance.now();
+      if (now > lastT) { const inst = (loaded - lastLoaded) / ((now - lastT) / 1000); speed = speed ? speed * 0.7 + inst * 0.3 : inst; lastT = now; lastLoaded = loaded; }
+      setProgress(total > 0 ? (loaded / total) * 100 : 0, "Uploading audio…");
+      const chips = [`${fmtBytes(loaded)} of ${fmtBytes(total)}`];
+      if (speed > 0) chips.push(`${fmtBytes(speed)}/s`);
+      if (speed > 0 && total > loaded) chips.push(`~${fmtSeconds((total - loaded) / speed)} left`);
+      setDownloadStats(chips);
+    });
     renderResult(p);
     ui.stat.textContent = `${p.model} · ${p.language} · ${p.durationMs} ms`;
     setStatus("Done ✓ — processed locally on the server, audio deleted after.");
@@ -393,8 +438,25 @@ async function transcribe() {
     transcribing = false;
     ui.go.disabled = false; ui.go.textContent = "Transcribe file";
     ui.micBtn.disabled = false;
-    setBusy(false);
+    setBusy(false); setDownloadStats([]);
   }
+}
+
+// POST audio to the backend with real upload progress (fetch has no upload progress).
+function postTranscribe(fd, onUp) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/transcribe");
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onUp(e.loaded, e.total); };
+    xhr.upload.onload = () => onUp(-1, -1);
+    xhr.onload = () => {
+      let body = {}; try { body = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || `HTTP ${xhr.status}`));
+    };
+    xhr.onerror = () => reject(new Error("network error"));
+    xhr.send(fd);
+  });
 }
 
 // ---------- Render + export ----------
