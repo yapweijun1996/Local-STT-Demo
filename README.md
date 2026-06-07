@@ -15,8 +15,9 @@ Powered by [Transformers.js](https://github.com/huggingface/transformers.js) run
 - 🎙️ **Two inputs** — drag-and-drop a file, or record live from the mic.
 - 🎞️ **Any common format** — mp4 (audio track), mp3, wav, m4a, ogg. Decoded natively in-browser.
 - 🧠 **Model choice** — `whisper-tiny` (fastest), `whisper-base`, `whisper-small`,
-  `onnx-community/whisper-large-v3-turbo` (high quality, WebGPU-first),
-  `Xenova/whisper-large` (highest quality, heavier).
+  `onnx-community/whisper-large-v3-turbo` (**recommended top-tier** — high quality and
+  actually runs in-browser), and `Xenova/whisper-large-v3` (highest quality, but ~1.5 GB and
+  often runs out of memory in-browser — see the [model guide](docs/STT_MODEL_GUIDE.md)).
 - ⚡ **WebGPU first**, automatic fallback to WASM (CPU) for Safari / Firefox.
 - 🌐 **Language** — auto-detect or pick (en / zh / ms / ja / es …).
 - ⏱️ **Timestamps** — per-segment timings, plus processing time + ×realtime after each run.
@@ -51,11 +52,11 @@ deployed there — it needs a server; run it locally (see [`backend/`](backend/)
 
 1. Open `index.html` in a browser (double-click — `file://` works). Chrome/Edge recommended for WebGPU.
 2. Pick a **model** (start with `tiny` to test, use `base`/`small` for real accuracy,
-   use `whisper-large-v3-turbo` for higher quality, and `Xenova/whisper-large` for best
-   accuracy when you have enough VRAM).
+   and `whisper-large-v3-turbo` for the best in-browser quality. `whisper-large-v3` is the
+   highest quality but is heavy and may run out of memory — if it errors, fall back to turbo).
 3. Pick the **language** (set it explicitly for non-English — e.g. `zh` for Chinese — small models guess poorly on `auto`).
 4. **Drop a file** or **Record mic**, then click **Transcribe**.
-5. First run downloads the model (tiny ~40MB · base ~150MB · small ~480MB · turbo ~600MB · large ~1.5GB); after that it works offline.
+5. First run downloads the model (tiny ~40MB · base ~150MB · small ~480MB · turbo ~1.2GB · large ~1.5GB); after that it works offline.
 
 ## Optional backend STT service
 
@@ -111,7 +112,7 @@ processing time and **×realtime** (audio seconds ÷ processing seconds) after e
 Takeaway: on a WebGPU machine, **turbo costs only ~1s more but is dramatically more
 accurate** (especially for non-English and proper nouns), so the app defaults to turbo
 when WebGPU is available and falls back to `base` on WASM. Both run several times faster
-than real time. (Numbers exclude the one-time model download; turbo is ~600MB on first run.)
+than real time. (Numbers exclude the one-time model download; turbo is ~1.2GB on first run.)
 
 ## Notes & limits
 
@@ -122,6 +123,13 @@ than real time. (Numbers exclude the one-time model download; turbo is ~600MB on
 - **mp4 must have an audio track.** A video-only mp4 (or an exotic codec) will fail to decode — you'll get a clear error; try Chrome or convert to wav/mp3.
 - **WebGPU** is best in Chrome/Edge. Other browsers fall back to WASM (slower but works).
 - First model download is large; subsequent runs are cached and offline.
+- **Big-model downloads & memory.** The progress bar shows real per-file bytes + ETA (from the
+  library's `progress_callback`; the Hugging Face CDN sends no `Timing-Allow-Origin`, so the
+  browser's own Resource Timing can't be used). Transient network drops
+  (`ERR_CONTENT_LENGTH_MISMATCH`) are retried automatically — already-downloaded files are cached,
+  so a retry resumes. `whisper-large-v3` (~1.5 GB) can still run out of memory **at inference**
+  in-browser (its quantized decoder runs on CPU/WASM); you'll get a clear "too heavy — try turbo"
+  message rather than a cryptic error. **`whisper-large-v3-turbo` is the reliable top-tier.**
 
 ## Two flavors in this repo
 
