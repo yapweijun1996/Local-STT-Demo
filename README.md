@@ -69,6 +69,16 @@ npm start              # serves http://localhost:8789
 That backend exposes `/health` and `POST /api/transcribe` and accepts `base`, `small`, `tiny`, or `large-v3-turbo`
 model aliases (if models are installed).
 
+## Pushing to GitHub (important)
+
+- **Do not commit model binaries.** `backend` uses `.gitignore` to keep `vendor/`, `models/`,
+  `uploads/`, and `transcripts/` local-only.  
+- Use `npm run setup` on each machine/environment (or CI job) to fetch models locally.  
+- Your current setup has already downloaded large models locally; they are ignored by git and will not
+  be pushed.
+- If you must version model artifacts in this repo (not recommended for this size), use Git LFS and
+  track only specific files after removing `vendor/` from ignore for those paths.
+
 ## How it works
 
 ```

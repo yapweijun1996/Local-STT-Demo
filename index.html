@@ -111,7 +111,16 @@
   .bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-top: 10px; }
   .bar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .2s; }
   #status { font-size: 13px; color: var(--muted); min-height: 18px; }
+  .status-line { display: flex; align-items: center; gap: 10px; }
+  .status-line #status { flex: 1; }
+  #statusValue {
+    flex: 0 0 auto;
+    font-size: 11px; border: 1px solid var(--border); border-radius: 999px;
+    padding: 2px 8px; color: var(--text); min-width: 58px; text-align: center;
+    font-variant-numeric: tabular-nums; letter-spacing: 0;
+  }
   #status.err { color: var(--danger); }
+  #status.err ~ #statusValue, #statusValue.err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
   #out { white-space: pre-wrap; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-height: 80px; font-size: 15px; }
   #out.live::after { content: "▋"; color: var(--accent); animation: blink 1s steps(2) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
@@ -200,7 +209,10 @@
 
   <!-- Progress -->
   <section class="panel">
-    <div id="status">Ready. Upload a file or record, then transcribe.</div>
+    <div class="status-line">
+      <div id="status">Ready. Upload a file or record, then transcribe.</div>
+      <div id="statusValue">0%</div>
+    </div>
     <div class="bar"><i id="prog"></i></div>
   </section>
 
@@ -231,7 +243,7 @@ const ui = {
   model: $("model"), lang: $("lang"), device: $("device"),
   drop: $("drop"), file: $("file"), fileinfo: $("fileinfo"),
   micBtn: $("micBtn"), micState: $("micState"),
-  go: $("go"), status: $("status"), prog: $("prog"),
+  go: $("go"), status: $("status"), statusValue: $("statusValue"), prog: $("prog"),
   out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"),
   backend: $("backend"), waveFile: $("waveFile"), waveMic: $("waveMic"),
   themeToggle: $("themeToggle"), installBtn: $("installBtn"),
@@ -266,8 +278,27 @@ let pcm = null;          // Float32Array @ 16kHz mono — unified input to Whisp
 let inputName = "audio";
 let pipe = null, pipeKey = "";
 
-function setStatus(msg, isErr = false) { ui.status.textContent = msg; ui.status.classList.toggle("err", isErr); }
-function setProg(p) { ui.prog.style.width = Math.max(0, Math.min(100, p)) + "%"; }
+function setStatus(msg, isErr = false) {
+  ui.status.textContent = msg;
+  ui.status.classList.toggle("err", isErr);
+  if (ui.statusValue) ui.statusValue.classList.toggle("err", isErr);
+}
+function formatPercent(value) {
+  const val = Number(value);
+  if (!Number.isFinite(val)) return "0.0";
+  return (val % 1 === 0 ? val.toFixed(0) : val.toFixed(1));
+}
+function setProgress(p, label, isErr = false) {
+  const safe = Math.max(0, Math.min(100, Number(p) || 0));
+  ui.prog.classList.remove("indet");
+  ui.prog.style.width = `${safe}%`;
+  if (ui.statusValue) {
+    ui.statusValue.textContent = `${formatPercent(safe)}%`;
+    ui.statusValue.classList.toggle("err", isErr);
+  }
+  if (label) setStatus(label, isErr);
+}
+function setProg(p) { setProgress(p); }
 
 // ---------- Waveform ----------
 function clearWave(c) { c.getContext("2d").clearRect(0, 0, c.width, c.height); }
@@ -391,8 +422,12 @@ async function getPipeline() {
   const opts = {
     device,
     progress_callback: (p) => {
-      if (p.status === "progress" && p.total) { setProg(p.progress); setStatus(`Downloading ${p.file?.split("/").pop() || "model"} — ${Math.round(p.progress)}%`); }
-      else if (p.status === "ready") setProg(0);
+      if (p.status === "progress" && p.total) {
+        const file = p.file?.split("/").pop() || "model";
+        setProgress(p.progress, `Downloading ${file}`);
+      } else if (p.status === "ready") {
+        setProgress(0, "Model loaded.");
+      }
     },
   };
   if (device === "webgpu") opts.dtype = isTurbo ? { encoder_model: "fp16", decoder_model_merged: "q4" } : { encoder_model: "fp32", decoder_model_merged: "fp32" };
@@ -427,14 +462,17 @@ async function transcribe() {
   try {
     const p = await getPipeline();
     setStatus("Transcribing… (long audio is chunked automatically)");
-    setProg(8);
+    setProgress(8, "Starting transcription...");
     const lang = ui.lang.value;
     let streamer = null, liveText = "";
     try {
       const time_precision = p.processor.feature_extractor.config.chunk_length / p.model.config.max_source_positions;
       streamer = new WhisperTextStreamer(p.tokenizer, {
         time_precision,
-        on_chunk_start: () => { startedChunks++; setProg(8 + Math.min(87, (startedChunks / estChunks) * 87)); setStatus(`Transcribing chunk ${startedChunks}/${estChunks}…`); },
+        on_chunk_start: () => {
+          startedChunks++;
+          setProgress(8 + Math.min(87, (startedChunks / estChunks) * 87), `Transcribing chunk ${startedChunks}/${estChunks}…`);
+        },
         callback_function: (text) => { liveText += text; ui.out.textContent = liveText; },
       });
     } catch (_) { streamer = null; }
@@ -447,7 +485,7 @@ async function transcribe() {
     const secs = (performance.now() - t0) / 1000;
     const rtf = durationS / secs;
     window.__lastRun = { model: ui.model.value, backend: ui.backend.textContent, audioS: +durationS.toFixed(1), procS: +secs.toFixed(2), rtf: +rtf.toFixed(2) };
-    setProg(100);
+    setProgress(100, "Finalizing transcript…");
     renderResult(res);
     setStatus(`Done ✓ in ${secs.toFixed(1)}s · ${rtf.toFixed(1)}× realtime · fully local, nothing uploaded.`);
   } catch (e) {
@@ -458,7 +496,7 @@ async function transcribe() {
     ui.out.classList.remove("live");
     ui.go.disabled = false; ui.go.textContent = "Transcribe file";
     ui.micBtn.disabled = false;
-    setTimeout(() => setProg(0), 800);
+    setTimeout(() => setProgress(0, "Ready. Upload a file or record, then transcribe."), 800);
   }
 }
 

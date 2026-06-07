@@ -1,4 +1,7 @@
+# Node dependencies and local runtime assets.
 node_modules/
+
+# Large local artifacts downloaded at setup/runtime; keep out of git by default.
 vendor/
 models/
 uploads/*

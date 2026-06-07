@@ -84,7 +84,16 @@
   .bar > i.indet { width: 35%; animation: slide 1.1s ease-in-out infinite; }
   @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
   #status { font-size: 13px; color: var(--muted); min-height: 18px; }
+  .status-line { display: flex; align-items: center; gap: 10px; }
+  .status-line #status { flex: 1; }
+  #statusValue {
+    flex: 0 0 auto;
+    font-size: 11px; border: 1px solid var(--border); border-radius: 999px;
+    padding: 2px 8px; color: var(--text); min-width: 58px; text-align: center;
+    font-variant-numeric: tabular-nums; letter-spacing: 0;
+  }
   #status.err { color: var(--danger); }
+  #status.err ~ #statusValue, #statusValue.err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
   #out { white-space: pre-wrap; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-height: 80px; font-size: 15px; }
   .seg { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border); }
   .seg .t { color: var(--accent); font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; padding-top: 2px; }
@@ -162,7 +171,10 @@
 
   <!-- Progress -->
   <section class="panel">
-    <div id="status">Ready. Upload a file or record, then transcribe.</div>
+    <div class="status-line">
+      <div id="status">Ready. Upload a file or record, then transcribe.</div>
+      <div id="statusValue">0%</div>
+    </div>
     <div class="bar"><i id="prog"></i></div>
   </section>
 
@@ -189,14 +201,36 @@ const ui = {
   model: $("model"), lang: $("lang"), useGpu: $("useGpu"), prompt: $("prompt"),
   drop: $("drop"), file: $("file"), fileinfo: $("fileinfo"),
   micBtn: $("micBtn"), micState: $("micState"), go: $("go"), waveMic: $("waveMic"),
-  status: $("status"), prog: $("prog"), stat: $("stat"),
+  status: $("status"), statusValue: $("statusValue"), prog: $("prog"), stat: $("stat"),
   out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"),
   health: $("health"), themeToggle: $("themeToggle"), installBtn: $("installBtn"),
 };
 
 let blobToSend = null, inputName = "audio";
-function setStatus(msg, isErr = false) { ui.status.textContent = msg; ui.status.classList.toggle("err", isErr); }
-function setBusy(on) { ui.prog.className = on ? "indet" : ""; ui.prog.style.width = on ? "" : "0%"; }
+function setStatus(msg, isErr = false) {
+  ui.status.textContent = msg;
+  ui.status.classList.toggle("err", isErr);
+  if (ui.statusValue) ui.statusValue.classList.toggle("err", isErr);
+}
+function formatPercent(value) {
+  const val = Number(value);
+  if (!Number.isFinite(val)) return "0.0";
+  return (val % 1 === 0 ? val.toFixed(0) : val.toFixed(1));
+}
+function setProgress(p, label, isErr = false) {
+  const safe = Math.max(0, Math.min(100, Number(p) || 0));
+  ui.prog.classList.remove("indet");
+  ui.prog.style.width = `${safe}%`;
+  if (ui.statusValue) {
+    ui.statusValue.textContent = `${formatPercent(safe)}%`;
+    ui.statusValue.classList.toggle("err", isErr);
+  }
+  if (label) setStatus(label, isErr);
+}
+function setBusy(on) {
+  ui.prog.classList.toggle("indet", !!on);
+  ui.statusValue.textContent = on ? "…%" : "0%";
+}
 
 // ---------- Live mic waveform ----------
 let liveRAF = null;

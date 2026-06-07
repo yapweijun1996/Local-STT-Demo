@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Optional: enable only if you decide to version large models in-repo with Git LFS.
+#backend/vendor/whisper.cpp/models/*.bin filter=lfs diff=lfs merge=lfs -text

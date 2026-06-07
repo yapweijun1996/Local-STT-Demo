@@ -42,6 +42,19 @@ WHISPER_MODELS="base small large-v3-turbo" npm run setup
 
 Windows: `npm run setup:win`.
 
+### GitHub push note
+
+Model artifacts are intentionally kept local and excluded from git:
+
+- `backend/vendor/whisper.cpp/models/` (downloaded `.bin` models)
+- `backend/uploads/` and `backend/transcripts/` (runtime temp/output)
+
+So `git push` stays lightweight and does not include binary data.  
+If you need to bootstrap a fresh environment, run `npm run setup` there instead of checking in binaries.
+
+If you later want to version a small subset of models, do it via Git LFS and explicit patterns only
+after reviewing GitHub LFS quotas.
+
 ## Run
 
 ```bash
