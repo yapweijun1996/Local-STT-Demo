@@ -9,6 +9,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Opt the bundled JS actions into Node 24 now (Node 20 is deprecated on runners
+# from 2026-06-16). Removes the deprecation warning until the actions ship Node 24.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 permissions:
   contents: read
   pages: write
