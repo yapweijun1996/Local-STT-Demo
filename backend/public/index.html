@@ -120,6 +120,30 @@
   .grow { flex: 1; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
   audio.mic-playback { width: 100%; height: 36px; margin-top: 10px; accent-color: var(--accent); display: block; }
+  /* API Reference */
+  .code-block { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; font: 13px/1.6 "JetBrains Mono","Fira Code",Menlo,Monaco,monospace; overflow-x: auto; white-space: pre; color: var(--text); margin: 0; }
+  .api-endpoint { margin-bottom: 24px; }
+  .api-endpoint:last-child { margin-bottom: 0; }
+  .api-method { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+  .badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; letter-spacing: .5px; }
+  .badge.get  { background: color-mix(in srgb, var(--accent-2) 18%, transparent); color: var(--accent-2); border: 1px solid color-mix(in srgb, var(--accent-2) 35%, transparent); }
+  .badge.post { background: color-mix(in srgb, var(--accent)   18%, transparent); color: var(--accent);   border: 1px solid color-mix(in srgb, var(--accent)   35%, transparent); }
+  .api-path { font: 600 14px/1 "JetBrains Mono","Fira Code",Menlo,monospace; }
+  .param-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0 14px; }
+  .param-table th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  .param-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; line-height: 1.5; }
+  .param-table tr:last-child td { border-bottom: none; }
+  .param-table code { font: 12px/1 "JetBrains Mono","Fira Code",Menlo,monospace; background: var(--panel-2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); }
+  .req { font-size: 10px; font-weight: 700; background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  .opt { font-size: 10px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+  .tab-btn { font: inherit; font-size: 12px; font-weight: 600; padding: 4px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer; }
+  .tab-btn.active { background: var(--accent); color: #04121f; border-color: var(--accent); }
+  :root[data-theme="light"] .tab-btn.active { color: #fff; }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+  .api-divider { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
+  .resp-label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin: 14px 0 6px; }
   .history-entry { border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
   .history-entry:last-child { margin-bottom: 0; }
   .history-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
@@ -245,6 +269,133 @@
       <div id="segs" class="muted" style="margin-top:8px">—</div>
     </details>
   </section>
+  <!-- API Reference -->
+  <section class="panel">
+    <details>
+      <summary class="card-title" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;margin:0">
+        🔌 API Reference
+        <span class="muted" style="font-size:12px;font-weight:400">— for engineers</span>
+      </summary>
+
+      <div style="margin-top:18px">
+
+        <!-- GET /health -->
+        <div class="api-endpoint">
+          <div class="api-method">
+            <span class="badge get">GET</span>
+            <span class="api-path">/health</span>
+            <span class="muted" style="font-size:12px">Check service status &amp; installed models</span>
+          </div>
+          <div class="tabs">
+            <button class="tab-btn active" data-tab="h-curl">curl</button>
+            <button class="tab-btn" data-tab="h-js">JavaScript</button>
+            <button class="tab-btn" data-tab="h-py">Python</button>
+          </div>
+          <div id="h-curl" class="tab-pane active"><pre class="code-block">curl https://stt.yapweijun1996.com/health</pre></div>
+          <div id="h-js"   class="tab-pane"><pre class="code-block">const res = await fetch("https://stt.yapweijun1996.com/health");
+const data = await res.json();
+console.log(data.ok, data.engines);</pre></div>
+          <div id="h-py"   class="tab-pane"><pre class="code-block">import requests
+r = requests.get("https://stt.yapweijun1996.com/health")
+print(r.json())</pre></div>
+
+          <p class="resp-label">Response</p>
+          <pre class="code-block">{
+  "ok": true,
+  "defaultModel": "large-v3",
+  "defaultEngine": "whisper-cpp",
+  "engines": {
+    "whisper-cpp":    { "available": true,  "gpu": "Metal (Apple Silicon)", "installed": { "large-v3": true } },
+    "faster-whisper": { "available": false, "gpu": "CUDA only (CPU on Mac)", "installed": { "large-v3": false } }
+  }
+}</pre>
+        </div>
+
+        <hr class="api-divider" />
+
+        <!-- POST /api/transcribe -->
+        <div class="api-endpoint">
+          <div class="api-method">
+            <span class="badge post">POST</span>
+            <span class="api-path">/api/transcribe</span>
+            <span class="muted" style="font-size:12px">Transcribe audio file → text</span>
+          </div>
+
+          <p class="muted" style="margin:0 0 10px">Content-Type: <code style="font:12px/1 monospace;background:var(--panel-2);padding:2px 6px;border-radius:4px;border:1px solid var(--border)">multipart/form-data</code></p>
+
+          <table class="param-table">
+            <thead><tr><th>Field</th><th>Type</th><th></th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>audio</code></td><td>file</td><td><span class="req">required</span></td><td>Audio file — mp4 / mp3 / wav / m4a / ogg, max 200 MB</td></tr>
+              <tr><td><code>model</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>large-v3</code> (default) · <code>large-v3-turbo</code> · <code>small</code> · <code>base</code> · <code>tiny</code></td></tr>
+              <tr><td><code>language</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>auto</code> (default) · <code>en</code> · <code>zh</code> · <code>ms</code> · <code>ja</code> · any Whisper language code</td></tr>
+              <tr><td><code>engine</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>whisper-cpp</code> (default, Metal GPU) · <code>faster-whisper</code> (CPU, code-switching)</td></tr>
+              <tr><td><code>useGpu</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>1</code> (default) · <code>0</code> — force CPU (whisper-cpp only)</td></tr>
+              <tr><td><code>prompt</code></td><td>string</td><td><span class="opt">optional</span></td><td>Domain vocabulary hint, e.g. <em>"sales order, SKU A123"</em> — improves proper noun accuracy</td></tr>
+            </tbody>
+          </table>
+
+          <div class="tabs">
+            <button class="tab-btn active" data-tab="t-curl">curl</button>
+            <button class="tab-btn" data-tab="t-js">JavaScript</button>
+            <button class="tab-btn" data-tab="t-py">Python</button>
+          </div>
+          <div id="t-curl" class="tab-pane active"><pre class="code-block">curl -X POST https://stt.yapweijun1996.com/api/transcribe \
+  -F "audio=@recording.wav" \
+  -F "model=large-v3" \
+  -F "language=auto" \
+  -F "engine=whisper-cpp"</pre></div>
+          <div id="t-js" class="tab-pane"><pre class="code-block">const fd = new FormData();
+fd.append("audio", fileBlob, "recording.wav");
+fd.append("model", "large-v3");
+fd.append("language", "auto");
+
+const res = await fetch("https://stt.yapweijun1996.com/api/transcribe", {
+  method: "POST",
+  body: fd,
+});
+const { text, language, durationMs, segments } = await res.json();
+console.log(text); // "Hello, this is a speech to text test."</pre></div>
+          <div id="t-py" class="tab-pane"><pre class="code-block">import requests
+
+with open("recording.wav", "rb") as f:
+    r = requests.post(
+        "https://stt.yapweijun1996.com/api/transcribe",
+        files={"audio": ("recording.wav", f, "audio/wav")},
+        data={"model": "large-v3", "language": "auto"},
+    )
+print(r.json()["text"])</pre></div>
+
+          <p class="resp-label">Response (200 OK)</p>
+          <pre class="code-block">{
+  "id":         "1781021264214-fb77149c",
+  "text":       "Hello, this is a speech to text test.",
+  "language":   "en",
+  "model":      "large",
+  "engine":     "whisper-cpp",
+  "durationMs": 15411,
+  "segments": [
+    { "startMs": 0, "endMs": 2120, "text": "Hello, this is a speech to text test.", "language": "en" }
+  ],
+  "files": { "originalName": "recording.wav" }
+}</pre>
+
+          <p class="resp-label">Error responses</p>
+          <pre class="code-block">413  { "error": "File too large (max 209715200 bytes)" }
+400  { "error": "Unknown model 'xxx'. Use: tiny, base, small, medium, large-v3, large-v3-turbo" }
+500  { "error": "&lt;exception message&gt;", "originalName": "recording.wav" }</pre>
+        </div>
+
+        <hr class="api-divider" />
+        <p class="muted" style="margin:0;font-size:12px">
+          Interactive Swagger docs: <a href="/docs" target="_blank" style="color:var(--accent)">/docs</a> ·
+          OpenAPI JSON: <a href="/openapi.json" target="_blank" style="color:var(--accent)">/openapi.json</a>
+        </p>
+
+      </div>
+    </details>
+  </section>
+
   <!-- Recording History -->
   <section class="panel hidden" id="historyPanel">
     <div class="row" style="margin-bottom:10px">
@@ -668,6 +819,19 @@ ui.clearHistoryBtn.addEventListener("click", async () => {
 });
 let _pendingHistoryId = null;
 openDB().then(renderHistory).catch(() => {});
+
+// ---------- API Reference tabs ----------
+document.querySelectorAll(".tabs").forEach(bar => {
+  bar.addEventListener("click", e => {
+    const btn = e.target.closest(".tab-btn");
+    if (!btn) return;
+    bar.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    const group = btn.closest(".api-endpoint") || btn.closest(".panel");
+    group.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+    group.querySelector("#" + btn.dataset.tab)?.classList.add("active");
+  });
+});
 
 // ---------- PWA ----------
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
