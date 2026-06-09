@@ -55,7 +55,7 @@ def is_available() -> bool:
 
 def installed_models() -> dict[str, bool]:
     model_dir = Path(os.environ.get("WHISPER_CPP_MODEL_DIR", whisper_cpp_dir() / "models"))
-    registry = ["tiny", "base", "small", "large-v3", "large-v3-turbo"]
+    registry = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
     result: dict[str, bool] = {}
     for name in registry:
         result[name] = (model_dir / f"ggml-{name}.bin").is_file()
