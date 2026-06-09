@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .transcribe import convert_to_wav, transcribe as faster_transcribe
 from .whisper_cpp import is_available as cpp_available, installed_models as cpp_models
+from .whisper_cpp import has_gpu as cpp_has_gpu
 from .whisper_cpp import transcribe_cpp
 
 # ── Paths ──────────────────────────────────────────────────────────────
@@ -34,8 +35,8 @@ TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Config ─────────────────────────────────────────────────────────────
 PORT = int(os.environ.get("PORT", "6601"))
-DEFAULT_MODEL = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
-DEFAULT_ENGINE = os.environ.get("STT_ENGINE", "faster-whisper")
+DEFAULT_MODEL = os.environ.get("WHISPER_MODEL", "large-v3")
+DEFAULT_ENGINE = os.environ.get("STT_ENGINE", "whisper-cpp")
 MAX_AUDIO_BYTES = int(os.environ.get("MAX_AUDIO_BYTES", str(200 * 1024 * 1024)))
 
 MODEL_REGISTRY = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
@@ -64,7 +65,11 @@ async def health():
         if hf_root:
             org = _FW_REPO[key]
             d = Path(hf_root) / f"models--{org}--faster-whisper-{key}"
-            fw_installed[key] = d.is_dir()
+            snapshots = d / "snapshots"
+            fw_installed[key] = any(
+                (snap / "model.bin").is_file()
+                for snap in snapshots.iterdir()
+            ) if snapshots.is_dir() else False
         else:
             fw_installed[key] = False
 
@@ -101,7 +106,7 @@ async def api_transcribe(
     model: str = Form(""),
     language: str = Form("auto"),
     engine: str = Form(""),
-    useGpu: str = Form("0"),
+    useGpu: str = Form("1"),
     prompt: str = Form(""),
 ):
     started_at = time.time()
@@ -131,11 +136,29 @@ async def api_transcribe(
         engine_name = engine.strip() or DEFAULT_ENGINE
 
         if engine_name == "whisper-cpp":
+            if useGpu != "1":
+                return JSONResponse(
+                    {
+                        "error": "whisper-cpp requires GPU/Metal in this deployment. "
+                                 "Set useGpu=1 (CPU fallback is disabled).",
+                    },
+                    status_code=400,
+                )
+
+            if not cpp_has_gpu():
+                return JSONResponse(
+                    {
+                        "error": "whisper-cpp is not GPU-enabled in this build. "
+                                 "Rebuild whisper.cpp with Metal/CUDA or switch to faster-whisper.",
+                    },
+                    status_code=400,
+                )
+
             result = transcribe_cpp(
                 str(wav_path),
                 model_name=model_name,
                 language=language.strip() or "auto",
-                use_gpu=useGpu == "1",
+                use_gpu=True,
                 prompt=prompt.strip() or None,
             )
         else:

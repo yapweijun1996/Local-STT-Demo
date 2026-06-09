@@ -8,7 +8,7 @@ module.exports = {
       interpreter: "none",
       env: {
         PORT: "6601",
-        WHISPER_MODEL: "large-v3-turbo",
+        WHISPER_MODEL: "large-v3",
         STT_ENGINE: "whisper-cpp",
         HF_HOME: "/Users/yapweijun/.cache/stt-models",
         // whisper.cpp engine (Metal GPU) — auto-detected if binary exists

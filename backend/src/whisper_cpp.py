@@ -13,6 +13,15 @@ import subprocess
 from pathlib import Path
 
 
+def has_gpu() -> bool:
+    """Return True when whisper.cpp was built with a GPU backend."""
+    cache = whisper_cpp_dir() / "build" / "CMakeCache.txt"
+    if not cache.is_file():
+        return False
+    text = cache.read_text(errors="ignore")
+    return "GGML_METAL:BOOL=ON" in text or "GGML_CUDA:BOOL=ON" in text
+
+
 def whisper_cpp_dir() -> Path:
     return Path(os.environ.get("WHISPER_CPP_DIR", Path(__file__).resolve().parent.parent / "vendor" / "whisper.cpp"))
 
