@@ -53,6 +53,18 @@ app.add_middleware(
 
 
 
+# faster-whisper model IDs differ by size. tiny–large-v3 are Systran;
+# large-v3-turbo is mobiuslabsgmbh.
+_WHISPER_REPO = {
+    "tiny": "Systran",
+    "base": "Systran",
+    "small": "Systran",
+    "medium": "Systran",
+    "large-v3": "Systran",
+    "large-v3-turbo": "mobiuslabsgmbh",
+}
+
+
 # ── Health ─────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
@@ -60,8 +72,8 @@ async def health():
     installed: dict[str, bool] = {}
     for key in MODEL_REGISTRY:
         if download_root:
-            # faster-whisper caches under models--<name>
-            model_dir = Path(download_root) / f"models--Systran--faster-whisper-{key}"
+            org = _WHISPER_REPO.get(key, "Systran")
+            model_dir = Path(download_root) / f"models--{org}--faster-whisper-{key}"
             installed[key] = model_dir.is_dir()
         else:
             installed[key] = False
