@@ -377,11 +377,16 @@ updateModelInfo();
 async function checkHealth() {
   try {
     const r = await fetch("/health"); const p = await r.json();
-    // Support both old flat {installed:{}} and new nested {engines:{faster-whisper:{installed:{}}}}
+    // Merge installed flags from all engines — a model is available if ANY engine has it
+    const fwMap  = p.engines?.["faster-whisper"]?.installed || {};
+    const cppMap = p.engines?.["whisper-cpp"]?.installed    || {};
+    const allKeys = [...new Set([...Object.keys(fwMap), ...Object.keys(cppMap)])];
     const installedMap = p.installed
-      || p.engines?.["faster-whisper"]?.installed
-      || p.engines?.["whisper-cpp"]?.installed
-      || {};
+      || Object.fromEntries(allKeys.map(k => [k, !!(fwMap[k] || cppMap[k])]));
+    // also attach per-model engine hint for tooltip use
+    const modelEngine = Object.fromEntries(allKeys.map(k => [
+      k, cppMap[k] ? "whisper-cpp" : fwMap[k] ? "faster-whisper" : null
+    ]));
     const installed = Object.entries(installedMap).filter(([, v]) => v).map(([k]) => k);
     ui.health.textContent = p.ok ? `API ready · ${installed.join(", ") || "no models"}` : "API up · models missing";
     ui.health.className = "tag " + (p.ok ? "ok" : "bad");
