@@ -1,21 +1,19 @@
-# Local STT — Docker mode (Node backend + whisper.cpp + ffmpeg + web UI).
-#   docker compose up --build      → http://localhost:8789/
-# Models download into the named volume on first start (WHISPER_MODELS), then persist.
+# Local STT — Docker mode (Python backend + faster-whisper + ffmpeg + web UI).
+#   docker compose up --build      → http://localhost:6601/
+# Models download into the named volume on first start (HF_HOME), then persist.
 services:
   stt:
     build: ./backend
     image: local-stt-backend
     ports:
-      - "8789:8789"
+      - "6601:6601"
     environment:
-      # Space-separated ggml model names to ensure on startup.
-      # Add more for accuracy, e.g. "base small large-v3-turbo" or include "large-v3"
-      # when memory permits.
-      WHISPER_MODELS: "base"
-      # GPU/Metal is unavailable in this CPU image; keep it off.
-      WHISPER_USE_GPU: "0"
+      # faster-whisper model: tiny | base | small | medium | large-v3 | large-v3-turbo
+      WHISPER_MODEL: "large-v3-turbo"
+      # Model cache dir (mounted volume). Keeps downloaded models across restarts.
+      HF_HOME: /app/backend/vendor/models
     volumes:
-      - stt-models:/app/backend/vendor/whisper.cpp/models
+      - stt-models:/app/backend/vendor/models
     restart: unless-stopped
 
 volumes:

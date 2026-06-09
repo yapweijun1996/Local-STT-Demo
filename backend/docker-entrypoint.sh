@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
 set -e
 
-# Download any ggml models listed in WHISPER_MODELS (space-separated) that aren't
-# already present in the (mounted) models dir. Self-contained curl — does not rely
-# on the upstream download script, which a volume mount can shadow.
-MODELS_DIR="${WHISPER_CPP_DIR:-/app/backend/vendor/whisper.cpp}/models"
-mkdir -p "$MODELS_DIR"
+# Pre-download the configured faster-whisper model so the first request
+# doesn't time out waiting for a multi-GB download from HuggingFace.
+#
+# WHISPER_MODEL: one of tiny / base / small / medium / large-v3 / large-v3-turbo
+# (default: large-v3-turbo).
+# HF_HOME: model cache dir (mounted volume), default /app/backend/vendor/models.
 
-for m in ${WHISPER_MODELS:-base}; do
-  f="$MODELS_DIR/ggml-$m.bin"
-  if [ ! -s "$f" ]; then
-    echo "[entrypoint] downloading model: $m"
-    if ! curl -fL --retry 3 -o "$f" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$m.bin"; then
-      echo "[entrypoint] WARN: failed to download '$m' (check the name); continuing"
-      rm -f "$f"
-    fi
-  fi
-done
+MODEL="${WHISPER_MODEL:-large-v3-turbo}"
+HF_HOME="${HF_HOME:-/app/backend/vendor/models}"
+export HF_HOME
 
-echo "[entrypoint] models present: $(ls -1 "$MODELS_DIR"/ggml-*.bin 2>/dev/null | wc -l | tr -d ' ')"
-exec node src/server.js
+echo "[entrypoint] HuggingFace cache: $HF_HOME"
+echo "[entrypoint] Ensuring model '$MODEL' is downloaded..."
+
+# Use a tiny Python snippet to trigger faster-whisper's auto-download.
+# Downloads the CTranslate2 model (~1.5 GB for large-v3-turbo) if not cached.
+python3 -c "
+import os, sys
+from faster_whisper import WhisperModel
+
+model = WhisperModel('${MODEL}', device='cpu', compute_type='int8',
+                     download_root=os.environ.get('HF_HOME'))
+# Just initialising the model triggers the download.
+# No audio passed — we only want the weights on disk.
+print(f'[entrypoint] Model ${MODEL} ready.')
+" || echo "[entrypoint] WARN: model pre-download failed; will retry on first request"
+
+echo "[entrypoint] Starting server on port ${PORT:-8789}…"
+exec python3 -m src.server

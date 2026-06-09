@@ -1,46 +1,33 @@
-# Local STT backend — Node + whisper.cpp + ffmpeg in one image.
-# whisper.cpp is compiled at build time (CPU); models are NOT baked in — they
-# download into a mounted volume on first start (see docker-entrypoint.sh), so
-# the image stays lean and models persist across container restarts.
-FROM node:22-bookworm-slim
+# Local STT backend — Python + faster-whisper + ffmpeg in one image.
+# faster-whisper (CTranslate2) is ~4x faster than whisper.cpp and supports
+# per-segment language detection for code-switching.
+# Models are NOT baked in — they download into a mounted volume on first start
+# (see docker-entrypoint.sh), so the image stays lean and models persist.
+FROM python:3.12-slim-bookworm
 
-# ffmpeg = audio/video decode; git+cmake+build-essential = compile whisper.cpp;
-# curl+ca-certificates = download ggml models at runtime.
+# ffmpeg = audio/video decode; curl = model pre-warm in entrypoint.
+# No cmake / build-essential needed — faster-whisper ships pre-built wheels.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ffmpeg git cmake build-essential ca-certificates curl \
+      ffmpeg curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/backend
 
-# Node deps first for layer caching.
-COPY package*.json ./
-RUN npm ci --omit=dev
+# Python deps first for layer caching (only invalidates when requirements.txt changes).
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-# App source (see .dockerignore — host vendor/node_modules/uploads excluded).
+# App source (see .dockerignore — __pycache__ / node_modules / vendor excluded).
+# Lands AFTER pip install so code changes don't re-run pip.
 COPY . .
 
-# Clone + build whisper.cpp (CPU build; no Metal/CUDA in this image).
-# GGML_NATIVE=OFF + explicit -march: on aarch64 the fp16 NEON intrinsics need a
-# +fp16-capable arch or GCC aborts ("vfmaq_f16 target specific option mismatch").
-# -Wno-error neutralises a GCC stringop-overflow false-positive; -j2 caps build RAM.
-RUN set -e; \
-    ARCH="$(uname -m)"; \
-    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
-      export CFLAGS="-march=armv8.2-a+fp16+dotprod -Wno-error"; \
-    else \
-      export CFLAGS="-Wno-error"; \
-    fi; \
-    export CXXFLAGS="$CFLAGS"; \
-    git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git vendor/whisper.cpp; \
-    cmake -S vendor/whisper.cpp -B vendor/whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DGGML_NATIVE=OFF; \
-    cmake --build vendor/whisper.cpp/build --config Release -j2; \
-    rm -rf vendor/whisper.cpp/.git vendor/whisper.cpp/build/CMakeFiles
+ENV PORT=6601 \
+    WHISPER_MODEL=large-v3-turbo \
+    HF_HOME=/app/backend/vendor/models
 
-ENV PORT=8789 \
-    WHISPER_MODELS=base
-EXPOSE 8789
+EXPOSE 6601
 
-# Models persist here; entrypoint fetches any missing ones listed in WHISPER_MODELS.
-VOLUME ["/app/backend/vendor/whisper.cpp/models"]
+# Models persist here; entrypoint pre-downloads the configured model on first start.
+VOLUME ["/app/backend/vendor/models"]
 
 ENTRYPOINT ["bash", "docker-entrypoint.sh"]

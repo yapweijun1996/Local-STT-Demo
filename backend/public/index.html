@@ -119,6 +119,15 @@
   .check { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
   .grow { flex: 1; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+  audio.mic-playback { width: 100%; height: 36px; margin-top: 10px; accent-color: var(--accent); display: block; }
+  .history-entry { border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+  .history-entry:last-child { margin-bottom: 0; }
+  .history-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .history-time { font-size: 12px; color: var(--muted); flex: 1; min-width: 120px; }
+  .history-audio { width: 100%; height: 36px; accent-color: var(--accent); display: block; margin: 6px 0; }
+  .history-text { font-size: 13px; max-height: 72px; overflow: hidden; white-space: pre-wrap; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
+  .history-del { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 2px 8px; border-radius: 6px; font-size: 12px; min-height: 26px; cursor: pointer; line-height: 1; }
+  .history-del:hover { border-color: var(--danger); color: var(--danger); background: transparent; }
 </style>
 </head>
 <body>
@@ -147,7 +156,32 @@
         <p id="modelInfo" class="muted" style="margin: 6px 0 0; font-size: 12px;"></p>
       </label>
       <label class="field">Language
-        <input id="lang" type="text" value="auto" size="6" />
+        <select id="lang">
+          <option value="auto">auto (detect)</option>
+          <option value="en">English</option>
+          <option value="zh">中文</option>
+          <option value="ja">日本語</option>
+          <option value="ko">한국어</option>
+          <option value="ms">Bahasa Melayu</option>
+          <option value="id">Bahasa Indonesia</option>
+          <option value="th">ไทย</option>
+          <option value="vi">Tiếng Việt</option>
+          <option value="ta">தமிழ்</option>
+          <option value="hi">हिन्दी</option>
+          <option value="ar">العربية</option>
+          <option value="fr">Français</option>
+          <option value="de">Deutsch</option>
+          <option value="es">Español</option>
+          <option value="pt">Português</option>
+          <option value="it">Italiano</option>
+          <option value="ru">Русский</option>
+          <option value="nl">Nederlands</option>
+          <option value="sv">Svenska</option>
+          <option value="tr">Türkçe</option>
+          <option value="pl">Polski</option>
+          <option value="he">עברית</option>
+          <option value="uk">Українська</option>
+        </select>
       </label>
       <label class="field">&nbsp;
         <span class="check"><input type="checkbox" id="useGpu" /> Use GPU / Metal</span>
@@ -182,6 +216,7 @@
         <span class="pill" id="micState">idle</span>
       </div>
       <p class="hint" style="margin:12px 0 0">Press Stop and it transcribes automatically — no extra click.</p>
+      <audio id="micPlayback" class="mic-playback hidden" controls></audio>
     </section>
   </div>
 
@@ -210,6 +245,15 @@
       <div id="segs" class="muted" style="margin-top:8px">—</div>
     </details>
   </section>
+  <!-- Recording History -->
+  <section class="panel hidden" id="historyPanel">
+    <div class="row" style="margin-bottom:10px">
+      <strong>🗂️ Recording History</strong>
+      <span class="grow"></span>
+      <button id="clearHistoryBtn" type="button" style="padding:0 12px;height:32px;font-size:12px;border-radius:8px;">Clear All</button>
+    </div>
+    <div id="historyList"></div>
+  </section>
 </main>
 
 <script>
@@ -218,10 +262,12 @@ const ui = {
   model: $("model"), lang: $("lang"), useGpu: $("useGpu"), prompt: $("prompt"),
   drop: $("drop"), file: $("file"), fileinfo: $("fileinfo"),
   micBtn: $("micBtn"), micState: $("micState"), go: $("go"), waveMic: $("waveMic"),
+  micPlayback: $("micPlayback"),
   status: $("status"), statusValue: $("statusValue"), prog: $("prog"), stat: $("stat"), progStats: $("progStats"),
   modelInfo: $("modelInfo"),
   out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"),
   health: $("health"), themeToggle: $("themeToggle"), installBtn: $("installBtn"),
+  historyPanel: $("historyPanel"), historyList: $("historyList"), clearHistoryBtn: $("clearHistoryBtn"),
 };
 
 const MODEL_INFO = {
@@ -384,6 +430,17 @@ ui.micBtn.addEventListener("click", async () => {
     ui.micState.textContent = "recorded ✓";
     ui.fileinfo.textContent = `mic-recording.${ext} · ${(blobToSend.size / 1048576).toFixed(1)} MB`;
     ui.go.disabled = false;
+    // Show playback immediately
+    if (ui.micPlayback._prevUrl) URL.revokeObjectURL(ui.micPlayback._prevUrl);
+    const playUrl = URL.createObjectURL(blobToSend);
+    ui.micPlayback._prevUrl = playUrl;
+    ui.micPlayback.src = playUrl;
+    ui.micPlayback.classList.remove("hidden");
+    // Pre-save to IndexedDB (transcript filled after transcription)
+    _pendingHistoryId = null;
+    dbSave({ ts: Date.now(), blob: blobToSend, model: ui.model.value, lang: ui.lang.value, transcript: "" })
+      .then(id => { _pendingHistoryId = id; })
+      .catch(() => {});
     transcribe();   // auto: Stop = intent to transcribe
   };
   mediaRec.start();
@@ -433,6 +490,11 @@ async function transcribe() {
     renderResult(p);
     ui.stat.textContent = `${p.model} · ${p.language} · ${p.durationMs} ms`;
     setStatus("Done ✓ — processed locally on the server, audio deleted after.");
+    // Update history record with transcript
+    if (_pendingHistoryId != null) {
+      const hid = _pendingHistoryId; _pendingHistoryId = null;
+      dbUpdate(hid, { transcript: p.text || "" }).then(renderHistory).catch(() => {});
+    }
   } catch (e) { setStatus("Failed: " + (e.message || e), true); }
   finally {
     transcribing = false;
@@ -488,6 +550,107 @@ function makeDownload(el, content, filename) {
   el.href = URL.createObjectURL(new Blob([content], { type: "text/plain" }));
   el.download = filename; el.classList.remove("hidden");
 }
+
+// ---------- IndexedDB Recording History ----------
+const DB_NAME = "stt-history", DB_VER = 1, DB_STORE = "recordings";
+let _db = null;
+function openDB() {
+  if (_db) return Promise.resolve(_db);
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(DB_NAME, DB_VER);
+    req.onupgradeneeded = e => {
+      const s = e.target.result.createObjectStore(DB_STORE, { keyPath: "id", autoIncrement: true });
+      s.createIndex("ts", "ts");
+    };
+    req.onsuccess = e => { _db = e.target.result; res(_db); };
+    req.onerror = e => rej(e.target.error);
+  });
+}
+async function dbSave(rec) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const req = db.transaction(DB_STORE, "readwrite").objectStore(DB_STORE).add(rec);
+    req.onsuccess = e => res(e.target.result);
+    req.onerror = e => rej(e.target.error);
+  });
+}
+async function dbUpdate(id, patch) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(DB_STORE, "readwrite");
+    const store = tx.objectStore(DB_STORE);
+    const get = store.get(id);
+    get.onsuccess = e => {
+      const put = store.put({ ...e.target.result, ...patch });
+      put.onsuccess = () => res();
+      put.onerror = e2 => rej(e2.target.error);
+    };
+    get.onerror = e => rej(e.target.error);
+  });
+}
+async function dbGetAll() {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const req = db.transaction(DB_STORE, "readonly").objectStore(DB_STORE).getAll();
+    req.onsuccess = e => res(e.target.result);
+    req.onerror = e => rej(e.target.error);
+  });
+}
+async function dbDelete(id) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const req = db.transaction(DB_STORE, "readwrite").objectStore(DB_STORE).delete(id);
+    req.onsuccess = () => res();
+    req.onerror = e => rej(e.target.error);
+  });
+}
+async function dbClearAll() {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const req = db.transaction(DB_STORE, "readwrite").objectStore(DB_STORE).clear();
+    req.onsuccess = () => res();
+    req.onerror = e => rej(e.target.error);
+  });
+}
+
+let _historyUrls = [];
+async function renderHistory() {
+  _historyUrls.forEach(u => URL.revokeObjectURL(u));
+  _historyUrls = [];
+  const records = await dbGetAll().catch(() => []);
+  if (!records.length) { ui.historyPanel.classList.add("hidden"); return; }
+  ui.historyPanel.classList.remove("hidden");
+  ui.historyList.innerHTML = "";
+  [...records].reverse().forEach(rec => {
+    const url = URL.createObjectURL(rec.blob);
+    _historyUrls.push(url);
+    const div = document.createElement("div");
+    div.className = "history-entry";
+    const date = new Date(rec.ts).toLocaleString();
+    div.innerHTML =
+      `<div class="history-meta">` +
+        `<span class="history-time">${date}</span>` +
+        `<span class="pill">${rec.model || "?"}</span>` +
+        `<span class="pill">${rec.lang || "auto"}</span>` +
+        `<span class="muted" style="font-size:11px">${fmtBytes(rec.blob.size)}</span>` +
+        `<button class="history-del" data-id="${rec.id}" title="Delete">✕</button>` +
+      `</div>` +
+      `<audio controls src="${url}" class="history-audio"></audio>` +
+      (rec.transcript ? `<div class="history-text">${rec.transcript.replace(/[<>&"]/g, c => ({ "<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;" })[c])}</div>` : "");
+    div.querySelector(".history-del").addEventListener("click", async () => {
+      await dbDelete(rec.id);
+      renderHistory();
+    });
+    ui.historyList.appendChild(div);
+  });
+}
+ui.clearHistoryBtn.addEventListener("click", async () => {
+  if (!confirm("Delete all recording history?")) return;
+  await dbClearAll();
+  renderHistory();
+});
+let _pendingHistoryId = null;
+openDB().then(renderHistory).catch(() => {});
 
 // ---------- PWA ----------
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {

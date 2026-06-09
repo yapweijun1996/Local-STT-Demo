@@ -10,3 +10,5 @@ transcripts/*
 !transcripts/.gitkeep
 .env
 .DS_Store
+__pycache__
+.venv
