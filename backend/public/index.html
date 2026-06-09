@@ -184,7 +184,7 @@
         </select>
       </label>
       <label class="field">&nbsp;
-        <span class="check"><input type="checkbox" id="useGpu" /> Use GPU / Metal</span>
+        <span class="check"><input type="checkbox" id="useGpu" checked disabled /> Use GPU / Metal (forced)</span>
       </label>
     </div>
     <label class="field" style="margin-top:12px">Prompt (optional — proper nouns / domain terms)
@@ -197,10 +197,10 @@
   <div class="inputs">
     <section class="panel">
       <h2 class="card-title">📁 Upload a file</h2>
-      <div id="drop">
-        <p><b>Drop a file</b> or click to choose</p>
-        <p class="muted">mp4 / mp3 / wav / m4a / ogg</p>
-        <p class="muted" id="fileinfo">no file selected</p>
+        <div id="drop">
+          <p><b>Drop a file</b> or click to choose</p>
+        <p class="muted">mp4 / mp3 / wav / m4a / ogg · max 200 MB</p>
+        <p class="muted" id="fileinfo">no file selected (max 200 MB)</p>
         <input id="file" type="file" accept="audio/*,video/mp4,video/*" class="hidden" />
       </div>
       <div class="row" style="margin-top:14px">
@@ -277,6 +277,8 @@ const MODEL_INFO = {
   "small": { size: "~465 MB", note: "better quality than base" },
   "tiny": { size: "~40 MB", note: "fastest; rough" },
 };
+const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
+const MAX_AUDIO_LABEL = fmtBytes(MAX_AUDIO_BYTES);
 function updateModelInfo() {
   const info = MODEL_INFO[ui.model.value];
   if (!ui.modelInfo) return;
@@ -284,7 +286,7 @@ function updateModelInfo() {
     ui.modelInfo.textContent = "";
     return;
   }
-  ui.modelInfo.textContent = `download size: ${info.size} · ${info.note} · ${ui.useGpu.checked ? "GPU enabled" : "CPU fallback"}`;
+  ui.modelInfo.textContent = `download size: ${info.size} · ${info.note} · GPU required`;
 }
 
 let blobToSend = null, inputName = "audio";
@@ -375,18 +377,20 @@ updateModelInfo();
 async function checkHealth() {
   try {
     const r = await fetch("/health"); const p = await r.json();
-    const installed = Object.entries(p.installed || {}).filter(([, v]) => v).map(([k]) => k);
-    ui.health.textContent = p.ok ? `API ready · ${installed.join(", ") || "no models"}` : "API up · run npm run setup";
+    // Support both old flat {installed:{}} and new nested {engines:{faster-whisper:{installed:{}}}}
+    const installedMap = p.installed
+      || p.engines?.["faster-whisper"]?.installed
+      || p.engines?.["whisper-cpp"]?.installed
+      || {};
+    const installed = Object.entries(installedMap).filter(([, v]) => v).map(([k]) => k);
+    ui.health.textContent = p.ok ? `API ready · ${installed.join(", ") || "no models"}` : "API up · models missing";
     ui.health.className = "tag " + (p.ok ? "ok" : "bad");
     [...ui.model.options].forEach(o => {
-      const ok = p.installed?.[o.value]; o.disabled = !ok;
+      const ok = installedMap[o.value]; o.disabled = !ok;
       if (!ok && !/not installed/.test(o.textContent)) o.textContent += " (not installed)";
     });
     const firstOk = [...ui.model.options].find(o => !o.disabled);
-    if (firstOk) {
-      ui.model.value = firstOk.value;
-      updateModelInfo();
-    }
+    if (firstOk) { ui.model.value = firstOk.value; updateModelInfo(); }
   } catch { ui.health.textContent = "API offline"; ui.health.className = "tag bad"; }
 }
 checkHealth();
@@ -395,8 +399,16 @@ checkHealth();
 function pickFile(f) {
   if (!f) return;
   blobToSend = f; inputName = (f.name || "audio").replace(/\.[^.]+$/, "");
-  ui.fileinfo.textContent = `${f.name} · ${(f.size / 1048576).toFixed(1)} MB`;
-  ui.go.disabled = false; setStatus("File ready. Click “Transcribe file”.");
+  const isTooBig = f.size > MAX_AUDIO_BYTES;
+  ui.fileinfo.textContent = `${f.name} · ${fmtBytes(f.size)} (max ${MAX_AUDIO_LABEL})`;
+  if (isTooBig) {
+    blobToSend = null;
+    ui.go.disabled = true;
+    setStatus(`File too large. Max upload size is ${MAX_AUDIO_LABEL}.`, true);
+    return;
+  }
+  ui.go.disabled = false;
+  setStatus("File ready. Click “Transcribe file”.");
 }
 ui.drop.addEventListener("click", () => ui.file.click());
 ui.file.addEventListener("change", (e) => pickFile(e.target.files[0]));
