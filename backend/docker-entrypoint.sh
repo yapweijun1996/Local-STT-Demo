@@ -28,5 +28,6 @@ model = WhisperModel('${MODEL}', device='cpu', compute_type='int8',
 print(f'[entrypoint] Model ${MODEL} ready.')
 " || echo "[entrypoint] WARN: model pre-download failed; will retry on first request"
 
-echo "[entrypoint] Starting server on port ${PORT:-8789}…"
+echo "[entrypoint] Starting server on port ${PORT:-6601}…"
+echo "[entrypoint] Engine: faster-whisper (whisper-cpp unavailable in Docker — no Metal GPU)"
 exec python3 -m src.server

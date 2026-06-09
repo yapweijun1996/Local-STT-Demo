@@ -1,6 +1,6 @@
-# Local STT backend — Python + faster-whisper + ffmpeg in one image.
-# faster-whisper (CTranslate2) is ~4x faster than whisper.cpp and supports
-# per-segment language detection for code-switching.
+# Local STT backend — Python + faster-whisper + ffmpeg.
+# Dual-engine: faster-whisper (code-switching) always available; whisper-cpp
+# (Metal GPU) auto-detected on bare-metal Mac, unavailable in Docker.
 # Models are NOT baked in — they download into a mounted volume on first start
 # (see docker-entrypoint.sh), so the image stays lean and models persist.
 FROM python:3.12-slim-bookworm
