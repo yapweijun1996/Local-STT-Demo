@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>Local STT — Node + whisper.cpp</title>
+<title>Local STT — Admin</title>
 <meta name="description" content="Server-side speech-to-text. Upload mp4/mp3/wav/m4a/ogg or record from the mic; whisper.cpp transcribes locally on the server." />
 <meta name="application-name" content="Local STT" />
 <meta name="color-scheme" content="dark light" />
-<meta name="theme-color" content="#0f1115" />
+<meta name="theme-color" content="#0e1015" />
 
 <!-- PWA -->
 <link rel="manifest" href="./manifest.webmanifest" />
@@ -18,289 +18,490 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Local STT" />
 <!--
-  Client for the Node.js + whisper.cpp STT backend.
+  Admin-panel client for the whisper.cpp STT backend (see DESIGN.md).
   Upload mp4/mp3/wav/m4a/ogg or record; the file is POSTed to /api/transcribe,
   converted to 16kHz mono by ffmpeg, transcribed by whisper-cli. Audio is deleted
-  after each request. PWA per KB blueprint (SW runs over localhost http).
+  after each request. PWA with force-reload updates (SW skipWaiting + controllerchange).
 -->
 <style>
+  /* ── Design tokens (DESIGN.md §4) ─────────────────────────────── */
   :root {
     color-scheme: dark;
-    --bg: #0f1115; --panel: #171a21; --panel-2: #1f242e; --border: #2a313d;
-    --text: #e6e9ef; --muted: #9aa4b2; --accent: #5b9cff; --accent-2: #3ad29f;
-    --danger: #ff6b6b; --radius: 14px;
+    --bg: #0e1015; --surface: #161922; --surface-2: #1d212c; --border: #262c38;
+    --text: #e7eaf0; --muted: #98a2b3;
+    --primary: #5b9cff; --success: #34d399; --danger: #f87171; --warning: #fbbf24;
+    --side-bg: #11131c; --side-text: #c9d1e0; --side-muted: #7c8699; --side-border: #1e2230;
+    --r-sm: 8px; --r-md: 12px; --r-lg: 16px;
+    --sidebar-w: 248px;
   }
   :root[data-theme="light"] {
     color-scheme: light;
-    --bg: #f5f7fb; --panel: #ffffff; --panel-2: #f1f5f9; --border: #d8dee8;
-    --text: #111827; --muted: #4b5563; --accent: #2563eb; --accent-2: #16a34a;
-    --danger: #dc2626;
+    --bg: #f3f5f9; --surface: #ffffff; --surface-2: #eef1f6; --border: #dbe1ea;
+    --text: #101725; --muted: #5b6472;
+    --primary: #2563eb; --success: #16a34a; --danger: #dc2626; --warning: #d97706;
+    /* sidebar stays dark in both themes (admin-panel convention) */
   }
   * { box-sizing: border-box; }
+  html, body { margin: 0; }
   body {
-    margin: 0;
-    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font: 14.5px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: var(--bg); color: var(--text);
-    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    -webkit-tap-highlight-color: transparent;
   }
-  header {
-    padding: 16px max(20px, env(safe-area-inset-left));
+  ::selection { background: color-mix(in srgb, var(--primary) 30%, transparent); }
+
+  /* ── App shell ────────────────────────────────────────────────── */
+  .app { min-height: 100dvh; }
+  .sidebar {
+    position: fixed; inset: 0 auto 0 0; width: var(--sidebar-w); z-index: 40;
+    background: var(--side-bg); color: var(--side-text);
+    border-right: 1px solid var(--side-border);
+    display: flex; flex-direction: column;
+    padding: calc(14px + env(safe-area-inset-top)) 0 calc(14px + env(safe-area-inset-bottom)) env(safe-area-inset-left);
+    transition: transform .22s ease;
+  }
+  .main { margin-left: var(--sidebar-w); min-height: 100dvh; display: flex; flex-direction: column; }
+  .scrim {
+    position: fixed; inset: 0; z-index: 35; background: rgba(8, 10, 16, .55);
+    opacity: 0; pointer-events: none; transition: opacity .22s ease;
+  }
+  @media (max-width: 1023px) {
+    .sidebar { transform: translateX(-100%); box-shadow: 0 0 40px rgba(0,0,0,.45); }
+    .main { margin-left: 0; }
+    body.nav-open .sidebar { transform: translateX(0); }
+    body.nav-open .scrim { opacity: 1; pointer-events: auto; }
+  }
+
+  /* ── Sidebar ──────────────────────────────────────────────────── */
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 18px 16px; }
+  .brand-logo {
+    width: 34px; height: 34px; border-radius: 9px; flex: none;
+    background: linear-gradient(135deg, var(--primary), #7c5bff);
+    display: grid; place-items: center; font-size: 17px;
+  }
+  .brand b { font-size: 15px; color: #fff; letter-spacing: .2px; }
+  .brand span { display: block; font-size: 11px; color: var(--side-muted); margin-top: 1px; }
+  .nav { flex: 1; overflow-y: auto; padding: 4px 10px; }
+  .nav-label { font-size: 10.5px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--side-muted); margin: 14px 10px 6px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; min-height: 42px;
+    padding: 0 12px; margin: 2px 0; border-radius: var(--r-sm);
+    color: var(--side-text); text-decoration: none; font-size: 13.5px; font-weight: 500;
+    border: 1px solid transparent; cursor: pointer;
+  }
+  .nav-item:hover { background: rgba(255,255,255,.05); }
+  .nav-item.active {
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+    border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+    color: #fff;
+  }
+  .nav-item .ico { width: 20px; text-align: center; flex: none; }
+  .nav-badge {
+    margin-left: auto; font-size: 11px; font-weight: 700; min-width: 20px; text-align: center;
+    background: color-mix(in srgb, var(--primary) 25%, transparent); color: #cfe1ff;
+    border-radius: 999px; padding: 1px 7px;
+  }
+  .side-foot { padding: 12px 18px 0; border-top: 1px solid var(--side-border); font-size: 12px; color: var(--side-muted); }
+  .side-health { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--side-text); font-size: 12.5px; }
+  .dot { width: 8px; height: 8px; border-radius: 999px; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--success); box-shadow: 0 0 6px color-mix(in srgb, var(--success) 60%, transparent); }
+  .dot.bad { background: var(--danger); }
+
+  /* ── Topbar ───────────────────────────────────────────────────── */
+  .topbar {
+    position: sticky; top: 0; z-index: 30;
+    display: flex; align-items: center; gap: 10px;
+    padding: calc(10px + env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) 10px max(20px, env(safe-area-inset-left));
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: saturate(180%) blur(12px); -webkit-backdrop-filter: saturate(180%) blur(12px);
     border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    position: sticky; top: 0; background: color-mix(in srgb, var(--bg) 88%, transparent);
-    backdrop-filter: saturate(180%) blur(10px); z-index: 5;
   }
-  header h1 { font-size: 17px; margin: 0; display: flex; align-items: center; gap: 8px; }
-  header .tag { font-size: 12px; color: var(--muted); border: 1px solid var(--border); padding: 2px 8px; border-radius: 999px; }
-  header .tag.ok { color: var(--accent-2); border-color: var(--accent-2); }
-  header .tag.bad { color: var(--danger); border-color: var(--danger); }
+  .topbar h1 { font-size: 17px; font-weight: 700; margin: 0; letter-spacing: .2px; }
   .spacer { flex: 1; }
-  .iconbtn { width: 38px; height: 38px; border: 1px solid var(--border); border-radius: 999px; padding: 0; cursor: pointer; background: var(--panel-2); color: var(--text); font-size: 16px; }
-  .iconbtn:hover { filter: brightness(1.07); }
-  .iconbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  #installBtn { width: auto; padding: 0 14px; height: 38px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); background: transparent; font-weight: 600; font-size: 13px; }
-  main { max-width: 980px; margin: 0 auto; padding: 22px max(18px, env(safe-area-inset-left)) 40px; }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 18px; }
-  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-  .card-title { font-size: 14px; font-weight: 700; margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
-  label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-  select, button, input[type=text], textarea { font: inherit; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; }
-  select, button { cursor: pointer; min-height: 40px; }
-  textarea { width: 100%; resize: vertical; min-height: 52px; }
-  button.primary { background: var(--accent); color: #04121f; border-color: var(--accent); font-weight: 600; }
-  :root[data-theme="light"] button.primary { color: #fff; }
-  button.rec { background: var(--danger); color: #fff; border-color: var(--danger); font-weight: 600; }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  button.big { min-height: 48px; width: 100%; font-weight: 600; }
-  .inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
-  @media (max-width: 720px) { .inputs { grid-template-columns: 1fr; } }
-  @media (max-width: 560px) {
-    main { padding: 16px 14px 36px; }
-    .settings-row label.field { width: 100%; }
-    .settings-row label.field select, .settings-row label.field input[type=text] { width: 100%; }
-    header h1 { font-size: 16px; }
-    header .tag { font-size: 11px; }
+  .topbar .menu-btn { display: none; }
+  @media (max-width: 1023px) { .topbar .menu-btn { display: inline-flex; } }
+
+  /* ── Content ──────────────────────────────────────────────────── */
+  .content { flex: 1; width: 100%; max-width: 1100px; margin: 0 auto; padding: 22px max(20px, env(safe-area-inset-right)) calc(44px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); }
+  .view.hidden { display: none; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 859px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  /* ── KPI strip ────────────────────────────────────────────────── */
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 1023px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+  .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 14px 16px; min-width: 0; }
+  .kpi-label { font-size: 11px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: var(--muted); }
+  .kpi-value { font-size: 16px; font-weight: 700; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kpi-value.ok { color: var(--success); }
+  .kpi-value.bad { color: var(--danger); }
+  .kpi-sub { font-size: 12px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── Card ─────────────────────────────────────────────────────── */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); margin-bottom: 16px; min-width: 0; }
+  .card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+  .card-title { font-size: 14.5px; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 8px; }
+  .card-body { padding: 16px 18px; }
+  .grid-2 .card { margin-bottom: 0; display: flex; flex-direction: column; }
+  .grid-2 .card-body { flex: 1; display: flex; flex-direction: column; }
+
+  /* ── Form fields ──────────────────────────────────────────────── */
+  .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .field-label { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .2px; }
+  select, input[type=text], textarea {
+    font: inherit; width: 100%;
+    background: var(--surface-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; min-height: 42px;
   }
-  .inputs .panel { margin: 0; display: flex; flex-direction: column; }
-  #drop { border: 2px dashed var(--border); border-radius: var(--radius); padding: 26px 18px; text-align: center; color: var(--muted); transition: border-color .15s, background .15s; cursor: pointer; }
-  #drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); }
+  textarea { resize: vertical; min-height: 56px; }
+  select:focus-visible, input:focus-visible, textarea:focus-visible, .btn:focus-visible, .iconbtn:focus-visible, .nav-item:focus-visible, .tab-btn:focus-visible {
+    outline: 2px solid var(--primary); outline-offset: 2px;
+  }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  @media (max-width: 859px) { .form-grid { grid-template-columns: 1fr; } }
+  .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; min-height: 42px; }
+  .check input { width: 16px; height: 16px; accent-color: var(--primary); }
+
+  /* ── Buttons ──────────────────────────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--surface-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px;
+    min-height: 42px; padding: 0 18px;
+    transition: filter .12s ease, background .12s ease;
+  }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; filter: none; }
+  .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .btn-lg { min-height: 48px; width: 100%; font-size: 15px; }
+  .btn-sm { min-height: 32px; padding: 0 12px; font-size: 12.5px; border-radius: var(--r-sm); }
+  .btn-ghost { background: transparent; }
+  .btn.rec { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .iconbtn {
+    width: 40px; height: 40px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border); border-radius: 999px; padding: 0; cursor: pointer;
+    background: var(--surface); color: var(--text); font-size: 16px;
+  }
+  .iconbtn:hover { filter: brightness(1.08); }
+  #installBtn { min-height: 36px; }
+
+  /* ── Tags / pills ─────────────────────────────────────────────── */
+  .tag {
+    font-size: 12px; font-weight: 600; color: var(--muted);
+    border: 1px solid var(--border); background: var(--surface);
+    padding: 3px 10px; border-radius: 999px; white-space: nowrap;
+  }
+  .tag.ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); background: color-mix(in srgb, var(--success) 10%, transparent); }
+  .tag.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .pill { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .hint { font-size: 12.5px; color: var(--success); }
+  .hidden { display: none !important; }
+
+  /* ── Drop zone / wave / progress ──────────────────────────────── */
+  #drop {
+    border: 2px dashed var(--border); border-radius: var(--r-md);
+    padding: 24px 16px; text-align: center; color: var(--muted);
+    transition: border-color .15s, background .15s; cursor: pointer;
+  }
+  #drop.over { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, transparent); color: var(--text); }
   #drop b { color: var(--text); }
-  .wave { display: block; width: 100%; height: 64px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; }
-  .bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-top: 10px; }
-  .bar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .2s; }
+  #drop p { margin: 4px 0; }
+  .wave { display: block; width: 100%; height: 64px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+  .bar { height: 8px; background: var(--surface-2); border-radius: 999px; overflow: hidden; margin-top: 12px; }
+  .bar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--success)); transition: width .2s; }
   .bar > i.indet { width: 35%; animation: slide 1.1s ease-in-out infinite; }
   @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
   #status { font-size: 13px; color: var(--muted); min-height: 18px; }
+  #status.err { color: var(--danger); }
   .status-line { display: flex; align-items: center; gap: 10px; }
   .status-line #status { flex: 1; }
   #statusValue {
-    flex: 0 0 auto;
-    font-size: 11px; border: 1px solid var(--border); border-radius: 999px;
+    flex: none; font-size: 11px; border: 1px solid var(--border); border-radius: 999px;
     padding: 2px 8px; color: var(--text); min-width: 58px; text-align: center;
-    font-variant-numeric: tabular-nums; letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
   }
-  #status.err { color: var(--danger); }
-  #status.err ~ #statusValue, #statusValue.err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+  #statusValue.err { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
   .prog-stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
   .prog-stats:empty { display: none; }
   .prog-stats span {
-    font-size: 11px; color: var(--muted); background: var(--panel-2);
+    font-size: 11px; color: var(--muted); background: var(--surface-2);
     border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px;
     font-variant-numeric: tabular-nums; white-space: nowrap;
   }
-  #out { white-space: pre-wrap; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-height: 80px; font-size: 15px; }
-  .seg { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--border); }
-  .seg .t { color: var(--accent); font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; padding-top: 2px; }
-  .muted { color: var(--muted); font-size: 13px; }
-  .hidden { display: none; }
-  a.dl { color: var(--accent-2); text-decoration: none; margin-right: 14px; font-size: 14px; }
-  .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
-  .hint { font-size: 12px; color: var(--accent-2); }
-  .check { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
-  .grow { flex: 1; }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
-  audio.mic-playback { width: 100%; height: 36px; margin-top: 10px; accent-color: var(--accent); display: block; }
-  /* API Reference */
-  .code-block { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; font: 13px/1.6 "JetBrains Mono","Fira Code",Menlo,Monaco,monospace; overflow-x: auto; white-space: pre; color: var(--text); margin: 0; }
+
+  /* ── Transcript / segments ────────────────────────────────────── */
+  #out { white-space: pre-wrap; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-height: 80px; font-size: 15px; }
+  .seg { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .seg:last-child { border-bottom: none; }
+  .seg .t { color: var(--primary); font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; padding-top: 2px; }
+  a.dl { color: var(--success); text-decoration: none; font-size: 13.5px; font-weight: 600; }
+  a.dl:hover { text-decoration: underline; }
+  #copyBtn, .history-copy { font-size: 13px; }
+  #copyBtn.copied, .history-copy.copied { color: var(--success); border-color: var(--success); }
+  audio.mic-playback { width: 100%; height: 38px; margin-top: 12px; display: block; }
+
+  /* ── History ──────────────────────────────────────────────────── */
+  .history-entry { border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px 14px; margin-bottom: 10px; background: var(--surface-2); }
+  .history-entry:last-child { margin-bottom: 0; }
+  .history-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .history-time { font-size: 12px; color: var(--muted); flex: 1; min-width: 120px; }
+  .history-audio { width: 100%; height: 38px; display: block; margin: 6px 0; }
+  .history-text { font-size: 13px; max-height: 72px; overflow: hidden; white-space: pre-wrap; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
+  .history-del { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 2px 9px; border-radius: 6px; font-size: 12px; min-height: 28px; cursor: pointer; line-height: 1; }
+  .history-del:hover { border-color: var(--danger); color: var(--danger); }
+  .empty-state { text-align: center; padding: 48px 20px; color: var(--muted); border: 1px dashed var(--border); border-radius: var(--r-lg); background: var(--surface); }
+  .empty-state .big-ico { font-size: 34px; display: block; margin-bottom: 8px; }
+
+  /* ── API reference ────────────────────────────────────────────── */
+  .code-block { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; font: 13px/1.6 "JetBrains Mono","Fira Code",Menlo,Monaco,monospace; overflow-x: auto; white-space: pre; color: var(--text); margin: 0; }
   .api-endpoint { margin-bottom: 24px; }
   .api-endpoint:last-child { margin-bottom: 0; }
-  .api-method { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+  .api-method { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
   .badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; letter-spacing: .5px; }
-  .badge.get  { background: color-mix(in srgb, var(--accent-2) 18%, transparent); color: var(--accent-2); border: 1px solid color-mix(in srgb, var(--accent-2) 35%, transparent); }
-  .badge.post { background: color-mix(in srgb, var(--accent)   18%, transparent); color: var(--accent);   border: 1px solid color-mix(in srgb, var(--accent)   35%, transparent); }
+  .badge.get  { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); border: 1px solid color-mix(in srgb, var(--success) 35%, transparent); }
+  .badge.post { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); border: 1px solid color-mix(in srgb, var(--primary) 35%, transparent); }
   .api-path { font: 600 14px/1 "JetBrains Mono","Fira Code",Menlo,monospace; }
   .param-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0 14px; }
   .param-table th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
   .param-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; line-height: 1.5; }
   .param-table tr:last-child td { border-bottom: none; }
-  .param-table code { font: 12px/1 "JetBrains Mono","Fira Code",Menlo,monospace; background: var(--panel-2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); }
+  .param-table code, .inline-code { font: 12px/1.4 "JetBrains Mono","Fira Code",Menlo,monospace; background: var(--surface-2); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); }
   .req { font-size: 10px; font-weight: 700; background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
-  .opt { font-size: 10px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
-  .tabs { display: flex; gap: 4px; margin-bottom: 8px; }
-  .tab-btn { font: inherit; font-size: 12px; font-weight: 600; padding: 4px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer; }
-  .tab-btn.active { background: var(--accent); color: #04121f; border-color: var(--accent); }
-  :root[data-theme="light"] .tab-btn.active { color: #fff; }
+  .opt { font-size: 10px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+  .tab-btn { font: inherit; font-size: 12px; font-weight: 600; padding: 5px 14px; min-height: 30px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); cursor: pointer; }
+  .tab-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
   .tab-pane { display: none; }
   .tab-pane.active { display: block; }
   .api-divider { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
   .resp-label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin: 14px 0 6px; }
-  .history-entry { border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
-  .history-entry:last-child { margin-bottom: 0; }
-  .history-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-  .history-time { font-size: 12px; color: var(--muted); flex: 1; min-width: 120px; }
-  .history-audio { width: 100%; height: 36px; accent-color: var(--accent); display: block; margin: 6px 0; }
-  .history-text { font-size: 13px; max-height: 72px; overflow: hidden; white-space: pre-wrap; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
-  .history-del { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 2px 8px; border-radius: 6px; font-size: 12px; min-height: 26px; cursor: pointer; line-height: 1; }
-  .history-del:hover { border-color: var(--danger); color: var(--danger); background: transparent; }
+  a.ext { color: var(--primary); }
+
+  /* ── Utilities & responsive details ───────────────────────────── */
+  .mt-12 { margin-top: 12px; }
+  .mt-16 { margin-top: 16px; }
+  .grow { flex: 1; }
+  @media (max-width: 759px) {
+    .content { padding: 16px 14px calc(40px + env(safe-area-inset-bottom)); }
+    .kpis { gap: 10px; }
+    .topbar h1 { font-size: 15.5px; }
+    .topbar .tag { display: none; }            /* health lives in sidebar + KPI on phones */
+    select, input[type=text], textarea { font-size: 16px; }  /* prevent iOS focus zoom */
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 </head>
 <body>
-<header>
-  <h1>🖥️ Local STT — Node</h1>
-  <span class="tag">server-side · 100% local · MIT</span>
-  <span class="tag" id="health">checking API…</span>
-  <span class="spacer"></span>
-  <button id="installBtn" class="iconbtn" type="button" hidden>⤓ Install</button>
-  <button class="iconbtn" id="themeToggle" type="button" aria-label="Toggle theme">☀️</button>
-</header>
+<div class="app">
 
-<main>
-  <!-- Settings -->
-  <section class="panel">
-    <h2 class="card-title">⚙️ Settings</h2>
-    <div class="row settings-row">
-      <label class="field">Model
-        <select id="model">
-          <option value="large-v3">large-v3 (best)</option>
-          <option value="base">base</option>
-          <option value="small">small</option>
-          <option value="tiny">tiny (fastest)</option>
-          <option value="large-v3-turbo">large-v3-turbo</option>
-        </select>
-        <p id="modelInfo" class="muted" style="margin: 6px 0 0; font-size: 12px;"></p>
-      </label>
-      <label class="field">Language
-        <select id="lang">
-          <option value="auto">auto (detect)</option>
-          <option value="en">English</option>
-          <option value="zh">中文</option>
-          <option value="ja">日本語</option>
-          <option value="ko">한국어</option>
-          <option value="ms">Bahasa Melayu</option>
-          <option value="id">Bahasa Indonesia</option>
-          <option value="th">ไทย</option>
-          <option value="vi">Tiếng Việt</option>
-          <option value="ta">தமிழ்</option>
-          <option value="hi">हिन्दी</option>
-          <option value="ar">العربية</option>
-          <option value="fr">Français</option>
-          <option value="de">Deutsch</option>
-          <option value="es">Español</option>
-          <option value="pt">Português</option>
-          <option value="it">Italiano</option>
-          <option value="ru">Русский</option>
-          <option value="nl">Nederlands</option>
-          <option value="sv">Svenska</option>
-          <option value="tr">Türkçe</option>
-          <option value="pl">Polski</option>
-          <option value="he">עברית</option>
-          <option value="uk">Українська</option>
-        </select>
-      </label>
-      <label class="field">&nbsp;
-        <span class="check"><input type="checkbox" id="useGpu" checked disabled /> Use GPU / Metal (forced)</span>
-      </label>
+  <!-- ═══ Sidebar ═══ -->
+  <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+    <div class="brand">
+      <div class="brand-logo">🎙️</div>
+      <div><b>Local STT</b><span>whisper.cpp · admin</span></div>
     </div>
-    <label class="field" style="margin-top:12px">Prompt (optional — proper nouns / domain terms)
-      <textarea id="prompt" placeholder="e.g. ERP vocabulary: sales order, SKU A123, Acme Singapore. Leave blank for neutral transcription."></textarea>
-    </label>
-    <p class="muted" style="margin:8px 0 0">Only models installed on the server (<code>npm run setup</code>) are selectable.</p>
-  </section>
-
-  <!-- Two inputs -->
-  <div class="inputs">
-    <section class="panel">
-      <h2 class="card-title">📁 Upload a file</h2>
-        <div id="drop">
-          <p><b>Drop a file</b> or click to choose</p>
-        <p class="muted">mp4 / mp3 / wav / m4a / ogg · max 200 MB</p>
-        <p class="muted" id="fileinfo">no file selected (max 200 MB)</p>
-        <input id="file" type="file" accept="audio/*,video/mp4,video/*" class="hidden" />
-      </div>
-      <div class="row" style="margin-top:14px">
-        <button id="go" class="primary big" disabled>Transcribe file</button>
-      </div>
-    </section>
-
-    <section class="panel">
-      <h2 class="card-title">🎙️ Record from mic</h2>
-      <canvas class="wave" id="waveMic" width="900" height="64" style="margin-top:0"></canvas>
-      <div class="row" style="margin-top:14px">
-        <button id="micBtn" class="big">● Record</button>
-        <span class="pill" id="micState">idle</span>
-      </div>
-      <p class="hint" style="margin:12px 0 0">Press Stop and it transcribes automatically — no extra click.</p>
-      <audio id="micPlayback" class="mic-playback hidden" controls></audio>
-    </section>
-  </div>
-
-  <!-- Progress -->
-  <section class="panel">
-    <div class="status-line">
-      <div id="status">Ready. Upload a file or record, then transcribe.</div>
-      <div id="statusValue">0%</div>
+    <nav class="nav">
+      <p class="nav-label">Workspace</p>
+      <a href="#" class="nav-item active" data-view="transcribe" aria-current="page"><span class="ico">🎛️</span> Transcribe</a>
+      <a href="#" class="nav-item" data-view="history"><span class="ico">🗂️</span> History <span class="nav-badge hidden" id="historyCount"></span></a>
+      <p class="nav-label">Developer</p>
+      <a href="#" class="nav-item" data-view="api"><span class="ico">🔌</span> API Reference</a>
+      <a href="/docs" target="_blank" rel="noopener" class="nav-item"><span class="ico">📑</span> Swagger UI ↗</a>
+    </nav>
+    <div class="side-foot">
+      <div class="side-health"><span class="dot" id="sideDot"></span><span id="sideHealth">checking…</span></div>
+      <div>server-side · 100% local · MIT</div>
     </div>
-    <div class="bar"><i id="prog"></i></div>
-    <div id="progStats" class="prog-stats"></div>
-  </section>
+  </aside>
+  <div class="scrim" id="scrim"></div>
 
-  <!-- Output -->
-  <section class="panel">
-    <div class="row" style="margin-bottom:10px">
-      <strong>Transcript</strong>
-      <span class="pill" id="stat"></span>
-      <span class="grow"></span>
-      <a href="#" id="dlTxt" class="dl hidden">⬇ .txt</a>
-      <a href="#" id="dlSrt" class="dl hidden">⬇ .srt</a>
-    </div>
-    <div id="out" class="muted">— output will appear here —</div>
-    <details style="margin-top:12px">
-      <summary class="muted" style="cursor:pointer">Timestamped segments</summary>
-      <div id="segs" class="muted" style="margin-top:8px">—</div>
-    </details>
-  </section>
-  <!-- API Reference -->
-  <section class="panel">
-    <details>
-      <summary class="card-title" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;margin:0">
-        🔌 API Reference
-        <span class="muted" style="font-size:12px;font-weight:400">— for engineers</span>
-      </summary>
+  <!-- ═══ Main ═══ -->
+  <div class="main">
+    <header class="topbar">
+      <button class="iconbtn menu-btn" id="menuBtn" type="button" aria-label="Open menu">☰</button>
+      <h1 id="viewTitle">Transcribe</h1>
+      <span class="tag" id="health">checking API…</span>
+      <span class="spacer"></span>
+      <button id="installBtn" class="btn btn-ghost btn-sm" type="button" hidden>⤓ Install app</button>
+      <button class="iconbtn" id="themeToggle" type="button" aria-label="Toggle theme">☀️</button>
+    </header>
 
-      <div style="margin-top:18px">
+    <main class="content">
 
-        <!-- GET /health -->
-        <div class="api-endpoint">
-          <div class="api-method">
-            <span class="badge get">GET</span>
-            <span class="api-path">/health</span>
-            <span class="muted" style="font-size:12px">Check service status &amp; installed models</span>
+      <!-- ════════ View: Transcribe ════════ -->
+      <section class="view" data-view-panel="transcribe">
+
+        <div class="kpis">
+          <div class="kpi"><div class="kpi-label">Server</div><div class="kpi-value" id="kpiServer">…</div><div class="kpi-sub" id="kpiServerSub">checking /health</div></div>
+          <div class="kpi"><div class="kpi-label">Engine</div><div class="kpi-value" id="kpiEngine">…</div><div class="kpi-sub" id="kpiEngineSub">—</div></div>
+          <div class="kpi"><div class="kpi-label">Default model</div><div class="kpi-value" id="kpiModel">…</div><div class="kpi-sub" id="kpiModelSub">—</div></div>
+          <div class="kpi"><div class="kpi-label">Max upload</div><div class="kpi-value">200 MB</div><div class="kpi-sub">auto-compress &gt; 5 MB</div></div>
+        </div>
+
+        <!-- Settings -->
+        <div class="card">
+          <div class="card-head"><h2 class="card-title">⚙️ Settings</h2></div>
+          <div class="card-body">
+            <div class="form-grid">
+              <label class="field"><span class="field-label">Model</span>
+                <select id="model">
+                  <option value="large-v3">large-v3 (best quality)</option>
+                  <option value="large-v3-turbo">large-v3-turbo (fast + accurate)</option>
+                  <option value="medium">medium</option>
+                  <option value="small">small</option>
+                  <option value="base">base</option>
+                  <option value="tiny">tiny (fastest)</option>
+                </select>
+                <p id="modelInfo" class="muted" style="margin:2px 0 0;font-size:12px"></p>
+              </label>
+              <label class="field"><span class="field-label">Language</span>
+                <select id="lang">
+                  <option value="auto">auto (detect)</option>
+                  <option value="en">English</option>
+                  <option value="zh">中文</option>
+                  <option value="ja">日本語</option>
+                  <option value="ko">한국어</option>
+                  <option value="ms">Bahasa Melayu</option>
+                  <option value="id">Bahasa Indonesia</option>
+                  <option value="th">ไทย</option>
+                  <option value="vi">Tiếng Việt</option>
+                  <option value="ta">தமிழ்</option>
+                  <option value="hi">हिन्दी</option>
+                  <option value="ar">العربية</option>
+                  <option value="fr">Français</option>
+                  <option value="de">Deutsch</option>
+                  <option value="es">Español</option>
+                  <option value="pt">Português</option>
+                  <option value="it">Italiano</option>
+                  <option value="ru">Русский</option>
+                  <option value="nl">Nederlands</option>
+                  <option value="sv">Svenska</option>
+                  <option value="tr">Türkçe</option>
+                  <option value="pl">Polski</option>
+                  <option value="he">עברית</option>
+                  <option value="uk">Українська</option>
+                </select>
+              </label>
+              <div class="field"><span class="field-label">Compute</span>
+                <span class="check"><input type="checkbox" id="useGpu" checked disabled /> GPU / Metal (forced)</span>
+              </div>
+            </div>
+            <label class="field mt-12"><span class="field-label">Prompt (optional — proper nouns / domain terms)</span>
+              <textarea id="prompt" placeholder="e.g. ERP vocabulary: sales order, SKU A123, Acme Singapore. Leave blank for neutral transcription."></textarea>
+            </label>
+            <p class="muted" style="margin:10px 0 0;font-size:12px">Only models installed on the server are selectable.</p>
           </div>
-          <div class="tabs">
-            <button class="tab-btn active" data-tab="h-curl">curl</button>
-            <button class="tab-btn" data-tab="h-js">JavaScript</button>
-            <button class="tab-btn" data-tab="h-py">Python</button>
+        </div>
+
+        <!-- Inputs -->
+        <div class="grid-2" style="margin-bottom:16px">
+          <div class="card">
+            <div class="card-head"><h2 class="card-title">📁 Upload a file</h2></div>
+            <div class="card-body">
+              <div id="drop">
+                <p><b>Drop a file</b> or click to choose</p>
+                <p class="muted">mp4 / mp3 / wav / m4a / ogg · max 200 MB</p>
+                <p class="muted" id="fileinfo">no file selected (max 200 MB)</p>
+                <input id="file" type="file" accept="audio/*,video/mp4,video/*" class="hidden" />
+              </div>
+              <div class="mt-16" style="margin-top:auto;padding-top:16px">
+                <button id="go" class="btn btn-primary btn-lg" disabled>Transcribe file</button>
+              </div>
+            </div>
           </div>
-          <div id="h-curl" class="tab-pane active"><pre class="code-block">curl https://stt.yapweijun1996.com/health</pre></div>
-          <div id="h-js"   class="tab-pane"><pre class="code-block">const res = await fetch("https://stt.yapweijun1996.com/health");
+
+          <div class="card">
+            <div class="card-head"><h2 class="card-title">🎙️ Record from mic</h2><span class="pill" id="micState">idle</span></div>
+            <div class="card-body">
+              <canvas class="wave" id="waveMic" width="900" height="64"></canvas>
+              <audio id="micPlayback" class="mic-playback hidden" controls></audio>
+              <p class="hint" style="margin:12px 0 0">Press Stop and it transcribes automatically — no extra click.</p>
+              <div class="mt-16" style="margin-top:auto;padding-top:16px">
+                <button id="micBtn" class="btn btn-lg">● Record</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Progress -->
+        <div class="card">
+          <div class="card-body">
+            <div class="status-line">
+              <div id="status">Ready. Upload a file or record, then transcribe.</div>
+              <div id="statusValue">0%</div>
+            </div>
+            <div class="bar"><i id="prog"></i></div>
+            <div id="progStats" class="prog-stats"></div>
+          </div>
+        </div>
+
+        <!-- Output -->
+        <div class="card">
+          <div class="card-head">
+            <h2 class="card-title">📝 Transcript</h2>
+            <span class="pill" id="stat"></span>
+            <span class="grow"></span>
+            <button id="copyBtn" class="btn btn-ghost btn-sm hidden" type="button" aria-label="Copy transcript">⎘ Copy</button>
+            <a href="#" id="dlTxt" class="dl hidden">⬇ .txt</a>
+            <a href="#" id="dlSrt" class="dl hidden">⬇ .srt</a>
+          </div>
+          <div class="card-body">
+            <div id="out" class="muted">— output will appear here —</div>
+            <details class="mt-12">
+              <summary class="muted" style="cursor:pointer">Timestamped segments</summary>
+              <div id="segs" class="muted" style="margin-top:8px">—</div>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════ View: History ════════ -->
+      <section class="view hidden" data-view-panel="history">
+        <div class="card hidden" id="historyPanel">
+          <div class="card-head">
+            <h2 class="card-title">🗂️ Recording History</h2>
+            <span class="grow"></span>
+            <button id="clearHistoryBtn" class="btn btn-ghost btn-sm" type="button">Clear All</button>
+          </div>
+          <div class="card-body"><div id="historyList"></div></div>
+        </div>
+        <div class="empty-state" id="historyEmpty">
+          <span class="big-ico">🗂️</span>
+          <b>No recordings yet</b>
+          <p class="muted" style="margin:6px 0 0">Mic recordings are saved locally in this browser (IndexedDB) and appear here with their transcripts.</p>
+        </div>
+      </section>
+
+      <!-- ════════ View: API Reference ════════ -->
+      <section class="view hidden" data-view-panel="api">
+        <div class="card">
+          <div class="card-head"><h2 class="card-title">🔌 API Reference</h2><span class="muted" style="font-size:12px">for engineers</span></div>
+          <div class="card-body">
+
+            <!-- GET /health -->
+            <div class="api-endpoint">
+              <div class="api-method">
+                <span class="badge get">GET</span>
+                <span class="api-path">/health</span>
+                <span class="muted" style="font-size:12px">Check service status &amp; installed models</span>
+              </div>
+              <div class="tabs">
+                <button class="tab-btn active" data-tab="h-curl">curl</button>
+                <button class="tab-btn" data-tab="h-js">JavaScript</button>
+                <button class="tab-btn" data-tab="h-py">Python</button>
+              </div>
+              <div id="h-curl" class="tab-pane active"><pre class="code-block">curl https://stt.yapweijun1996.com/health</pre></div>
+              <div id="h-js"   class="tab-pane"><pre class="code-block">const res = await fetch("https://stt.yapweijun1996.com/health");
 const data = await res.json();
 console.log(data.ok, data.engines);</pre></div>
-          <div id="h-py"   class="tab-pane"><pre class="code-block">import requests
+              <div id="h-py"   class="tab-pane"><pre class="code-block">import requests
 r = requests.get("https://stt.yapweijun1996.com/health")
 print(r.json())</pre></div>
 
-          <p class="resp-label">Response</p>
-          <pre class="code-block">{
+              <p class="resp-label">Response</p>
+              <pre class="code-block">{
   "ok": true,
   "defaultModel": "large-v3",
   "defaultEngine": "whisper-cpp",
@@ -309,43 +510,43 @@ print(r.json())</pre></div>
     "faster-whisper": { "available": false, "gpu": "CUDA only (CPU on Mac)", "installed": { "large-v3": false } }
   }
 }</pre>
-        </div>
+            </div>
 
-        <hr class="api-divider" />
+            <hr class="api-divider" />
 
-        <!-- POST /api/transcribe -->
-        <div class="api-endpoint">
-          <div class="api-method">
-            <span class="badge post">POST</span>
-            <span class="api-path">/api/transcribe</span>
-            <span class="muted" style="font-size:12px">Transcribe audio file → text</span>
-          </div>
+            <!-- POST /api/transcribe -->
+            <div class="api-endpoint">
+              <div class="api-method">
+                <span class="badge post">POST</span>
+                <span class="api-path">/api/transcribe</span>
+                <span class="muted" style="font-size:12px">Transcribe audio file → text</span>
+              </div>
 
-          <p class="muted" style="margin:0 0 10px">Content-Type: <code style="font:12px/1 monospace;background:var(--panel-2);padding:2px 6px;border-radius:4px;border:1px solid var(--border)">multipart/form-data</code></p>
+              <p class="muted" style="margin:0 0 10px">Content-Type: <code class="inline-code">multipart/form-data</code></p>
 
-          <table class="param-table">
-            <thead><tr><th>Field</th><th>Type</th><th></th><th>Description</th></tr></thead>
-            <tbody>
-              <tr><td><code>audio</code></td><td>file</td><td><span class="req">required</span></td><td>Audio file — mp4 / mp3 / wav / m4a / ogg, max 200 MB</td></tr>
-              <tr><td><code>model</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>large-v3</code> (default) · <code>large-v3-turbo</code> · <code>small</code> · <code>base</code> · <code>tiny</code></td></tr>
-              <tr><td><code>language</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>auto</code> (default) · <code>en</code> · <code>zh</code> · <code>ms</code> · <code>ja</code> · any Whisper language code</td></tr>
-              <tr><td><code>engine</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>whisper-cpp</code> (default, Metal GPU) · <code>faster-whisper</code> (CPU, code-switching)</td></tr>
-              <tr><td><code>useGpu</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>1</code> (default) · <code>0</code> — force CPU (whisper-cpp only)</td></tr>
-              <tr><td><code>prompt</code></td><td>string</td><td><span class="opt">optional</span></td><td>Domain vocabulary hint, e.g. <em>"sales order, SKU A123"</em> — improves proper noun accuracy</td></tr>
-            </tbody>
-          </table>
+              <table class="param-table">
+                <thead><tr><th>Field</th><th>Type</th><th></th><th>Description</th></tr></thead>
+                <tbody>
+                  <tr><td><code>audio</code></td><td>file</td><td><span class="req">required</span></td><td>Audio file — mp4 / mp3 / wav / m4a / ogg, max 200 MB</td></tr>
+                  <tr><td><code>model</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>large-v3</code> (default) · <code>large-v3-turbo</code> · <code>medium</code> · <code>small</code> · <code>base</code> · <code>tiny</code></td></tr>
+                  <tr><td><code>language</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>auto</code> (default) · <code>en</code> · <code>zh</code> · <code>ms</code> · <code>ja</code> · any Whisper language code</td></tr>
+                  <tr><td><code>engine</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>whisper-cpp</code> (default, Metal GPU) · <code>faster-whisper</code> (CPU, code-switching)</td></tr>
+                  <tr><td><code>useGpu</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>1</code> (default) · <code>0</code> — force CPU (whisper-cpp only)</td></tr>
+                  <tr><td><code>prompt</code></td><td>string</td><td><span class="opt">optional</span></td><td>Domain vocabulary hint, e.g. <em>"sales order, SKU A123"</em> — improves proper noun accuracy</td></tr>
+                </tbody>
+              </table>
 
-          <div class="tabs">
-            <button class="tab-btn active" data-tab="t-curl">curl</button>
-            <button class="tab-btn" data-tab="t-js">JavaScript</button>
-            <button class="tab-btn" data-tab="t-py">Python</button>
-          </div>
-          <div id="t-curl" class="tab-pane active"><pre class="code-block">curl -X POST https://stt.yapweijun1996.com/api/transcribe \
+              <div class="tabs">
+                <button class="tab-btn active" data-tab="t-curl">curl</button>
+                <button class="tab-btn" data-tab="t-js">JavaScript</button>
+                <button class="tab-btn" data-tab="t-py">Python</button>
+              </div>
+              <div id="t-curl" class="tab-pane active"><pre class="code-block">curl -X POST https://stt.yapweijun1996.com/api/transcribe \
   -F "audio=@recording.wav" \
   -F "model=large-v3" \
   -F "language=auto" \
   -F "engine=whisper-cpp"</pre></div>
-          <div id="t-js" class="tab-pane"><pre class="code-block">const fd = new FormData();
+              <div id="t-js" class="tab-pane"><pre class="code-block">const fd = new FormData();
 fd.append("audio", fileBlob, "recording.wav");
 fd.append("model", "large-v3");
 fd.append("language", "auto");
@@ -356,7 +557,7 @@ const res = await fetch("https://stt.yapweijun1996.com/api/transcribe", {
 });
 const { text, language, durationMs, segments } = await res.json();
 console.log(text); // "Hello, this is a speech to text test."</pre></div>
-          <div id="t-py" class="tab-pane"><pre class="code-block">import requests
+              <div id="t-py" class="tab-pane"><pre class="code-block">import requests
 
 with open("recording.wav", "rb") as f:
     r = requests.post(
@@ -366,8 +567,8 @@ with open("recording.wav", "rb") as f:
     )
 print(r.json()["text"])</pre></div>
 
-          <p class="resp-label">Response (200 OK)</p>
-          <pre class="code-block">{
+              <p class="resp-label">Response (200 OK)</p>
+              <pre class="code-block">{
   "id":         "1781021264214-fb77149c",
   "text":       "Hello, this is a speech to text test.",
   "language":   "en",
@@ -380,33 +581,27 @@ print(r.json()["text"])</pre></div>
   "files": { "originalName": "recording.wav" }
 }</pre>
 
-          <p class="resp-label">Error responses</p>
-          <pre class="code-block">413  { "error": "File too large (max 209715200 bytes)" }
+              <p class="resp-label">Error responses</p>
+              <pre class="code-block">413  { "error": "File too large (max 209715200 bytes)" }
 400  { "error": "Unknown model 'xxx'. Use: tiny, base, small, medium, large-v3, large-v3-turbo" }
 500  { "error": "&lt;exception message&gt;", "originalName": "recording.wav" }</pre>
+            </div>
+
+            <hr class="api-divider" />
+            <p class="muted" style="margin:0;font-size:12px">
+              Interactive Swagger docs: <a href="/docs" target="_blank" rel="noopener" class="ext">/docs</a> ·
+              OpenAPI JSON: <a href="/openapi.json" target="_blank" rel="noopener" class="ext">/openapi.json</a>
+            </p>
+
+          </div>
         </div>
+      </section>
 
-        <hr class="api-divider" />
-        <p class="muted" style="margin:0;font-size:12px">
-          Interactive Swagger docs: <a href="/docs" target="_blank" style="color:var(--accent)">/docs</a> ·
-          OpenAPI JSON: <a href="/openapi.json" target="_blank" style="color:var(--accent)">/openapi.json</a>
-        </p>
+    </main>
+  </div>
+</div>
 
-      </div>
-    </details>
-  </section>
-
-  <!-- Recording History -->
-  <section class="panel hidden" id="historyPanel">
-    <div class="row" style="margin-bottom:10px">
-      <strong>🗂️ Recording History</strong>
-      <span class="grow"></span>
-      <button id="clearHistoryBtn" type="button" style="padding:0 12px;height:32px;font-size:12px;border-radius:8px;">Clear All</button>
-    </div>
-    <div id="historyList"></div>
-  </section>
-</main>
-
+<script src="vendor/webm-muxer.min.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const ui = {
@@ -416,17 +611,45 @@ const ui = {
   micPlayback: $("micPlayback"),
   status: $("status"), statusValue: $("statusValue"), prog: $("prog"), stat: $("stat"), progStats: $("progStats"),
   modelInfo: $("modelInfo"),
-  out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"),
+  out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"), copyBtn: $("copyBtn"),
   health: $("health"), themeToggle: $("themeToggle"), installBtn: $("installBtn"),
   historyPanel: $("historyPanel"), historyList: $("historyList"), clearHistoryBtn: $("clearHistoryBtn"),
+  historyEmpty: $("historyEmpty"), historyCount: $("historyCount"),
+  menuBtn: $("menuBtn"), scrim: $("scrim"), viewTitle: $("viewTitle"),
+  sideDot: $("sideDot"), sideHealth: $("sideHealth"),
+  kpiServer: $("kpiServer"), kpiServerSub: $("kpiServerSub"),
+  kpiEngine: $("kpiEngine"), kpiEngineSub: $("kpiEngineSub"),
+  kpiModel: $("kpiModel"), kpiModelSub: $("kpiModelSub"),
 };
 
+// ---------- View router (admin shell) ----------
+const VIEW_TITLES = { transcribe: "Transcribe", history: "Recording History", api: "API Reference" };
+function switchView(name) {
+  document.querySelectorAll(".nav-item[data-view]").forEach(a => {
+    const on = a.dataset.view === name;
+    a.classList.toggle("active", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
+  document.querySelectorAll("[data-view-panel]").forEach(s => s.classList.toggle("hidden", s.dataset.viewPanel !== name));
+  ui.viewTitle.textContent = VIEW_TITLES[name] || name;
+  closeDrawer();
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll(".nav-item[data-view]").forEach(a =>
+  a.addEventListener("click", (e) => { e.preventDefault(); switchView(a.dataset.view); }));
+
+function closeDrawer() { document.body.classList.remove("nav-open"); }
+ui.menuBtn.addEventListener("click", () => document.body.classList.toggle("nav-open"));
+ui.scrim.addEventListener("click", closeDrawer);
+window.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+
 const MODEL_INFO = {
-  "large-v3": { size: "~2.6 GB", note: "highest quality (download + RAM heavy)" },
-  "large-v3-turbo": { size: "~1.5 GB", note: "strong quality/throughput balance" },
-  "base": { size: "~140 MB", note: "fast baseline" },
-  "small": { size: "~465 MB", note: "better quality than base" },
-  "tiny": { size: "~40 MB", note: "fastest; rough" },
+  "large-v3":       { size: "~2.9 GB", note: "highest accuracy, 99 languages" },
+  "large-v3-turbo": { size: "~1.5 GB", note: "distilled large-v3 — fast + accurate" },
+  "medium":         { size: "~769 MB", note: "good balance of speed and quality" },
+  "small":          { size: "~465 MB", note: "lightweight, decent accuracy" },
+  "base":           { size: "~140 MB", note: "fast baseline, limited accuracy" },
+  "tiny":           { size: "~40 MB",  note: "fastest, rough transcription" },
 };
 const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
 const MAX_AUDIO_LABEL = fmtBytes(MAX_AUDIO_BYTES);
@@ -513,18 +736,36 @@ function resolveTheme(m) { return m === "light" ? "light" : m === "dark" ? "dark
 function applyTheme(m) {
   themeMode = m; const r = resolveTheme(m);
   document.documentElement.dataset.theme = r; document.documentElement.style.colorScheme = r;
-  if (themeMeta) themeMeta.content = r === "dark" ? "#0f1115" : "#f5f7fb";
+  if (themeMeta) themeMeta.content = r === "dark" ? "#0e1015" : "#f3f5f9";
   ui.themeToggle.textContent = r === "dark" ? "☀️" : "🌙";
   try { localStorage.setItem(THEME_KEY, m); } catch {}
 }
 ui.themeToggle.addEventListener("click", () => applyTheme(resolveTheme(themeMode) === "dark" ? "light" : "dark"));
+function copyText(text, btn) {
+  const succeed = () => {
+    btn.textContent = "✓ Copied"; btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "⎘ Copy"; btn.classList.remove("copied"); }, 2000);
+  };
+  navigator.clipboard.writeText(text).then(succeed).catch(() => {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select(); document.execCommand("copy");
+    document.body.removeChild(ta);
+    succeed();
+  });
+}
+ui.copyBtn.addEventListener("click", () => {
+  const text = ui.out.textContent || "";
+  if (!text || text === "— output will appear here —") return;
+  copyText(text, ui.copyBtn);
+});
 applyTheme(themeMode);
 themeQuery.addEventListener?.("change", () => { if (themeMode === "system") applyTheme("system"); });
 ui.model.addEventListener("change", updateModelInfo);
 ui.useGpu.addEventListener("change", updateModelInfo);
 updateModelInfo();
 
-// ---------- Health ----------
+// ---------- Health (topbar chip + sidebar + KPI strip) ----------
 async function checkHealth() {
   try {
     const r = await fetch("/health"); const p = await r.json();
@@ -534,12 +775,8 @@ async function checkHealth() {
     const allKeys = [...new Set([...Object.keys(fwMap), ...Object.keys(cppMap)])];
     const installedMap = p.installed
       || Object.fromEntries(allKeys.map(k => [k, !!(fwMap[k] || cppMap[k])]));
-    // also attach per-model engine hint for tooltip use
-    const modelEngine = Object.fromEntries(allKeys.map(k => [
-      k, cppMap[k] ? "whisper-cpp" : fwMap[k] ? "faster-whisper" : null
-    ]));
     const installed = Object.entries(installedMap).filter(([, v]) => v).map(([k]) => k);
-    ui.health.textContent = p.ok ? `API ready · ${installed.join(", ") || "no models"}` : "API up · models missing";
+    ui.health.textContent = p.ok ? "API ready" : "models missing";
     ui.health.className = "tag " + (p.ok ? "ok" : "bad");
     [...ui.model.options].forEach(o => {
       const ok = installedMap[o.value]; o.disabled = !ok;
@@ -547,24 +784,104 @@ async function checkHealth() {
     });
     const firstOk = [...ui.model.options].find(o => !o.disabled);
     if (firstOk) { ui.model.value = firstOk.value; updateModelInfo(); }
-  } catch { ui.health.textContent = "API offline"; ui.health.className = "tag bad"; }
+    // KPI strip + sidebar summary
+    const cpp = p.engines?.["whisper-cpp"] || {};
+    ui.kpiServer.textContent = p.ok ? "Online" : "Degraded";
+    ui.kpiServer.className = "kpi-value " + (p.ok ? "ok" : "bad");
+    ui.kpiServerSub.textContent = `${installed.length} model${installed.length === 1 ? "" : "s"} installed`;
+    ui.kpiEngine.textContent = p.defaultEngine || "whisper-cpp";
+    ui.kpiEngineSub.textContent = cpp.gpu || "—";
+    ui.kpiModel.textContent = p.defaultModel || "—";
+    ui.kpiModelSub.textContent = MODEL_INFO[p.defaultModel]?.note || "";
+    ui.sideDot.className = "dot " + (p.ok ? "ok" : "bad");
+    ui.sideHealth.textContent = p.ok ? `Online · ${cpp.gpu || "GPU"}` : "Models missing";
+  } catch {
+    ui.health.textContent = "API offline"; ui.health.className = "tag bad";
+    ui.kpiServer.textContent = "Offline"; ui.kpiServer.className = "kpi-value bad";
+    ui.kpiServerSub.textContent = "cannot reach /health";
+    ui.sideDot.className = "dot bad"; ui.sideHealth.textContent = "API offline";
+  }
 }
 checkHealth();
 
+// ---------- Client-side audio compression (large uploads) ----------
+// Decode → downmix/resample to 16 kHz mono → re-encode as 32 kbps Opus/WebM.
+// The server feeds Whisper 16 kHz mono WAV anyway, so this loses nothing for STT.
+const COMPRESS_THRESHOLD = 5 * 1024 * 1024;   // below this the decode isn't worth it
+
+async function compressAudioFile(file) {
+  if (!window.WebMMuxer || typeof AudioEncoder === "undefined") return null;
+  // Opus accepts 8/12/16/24/48 kHz input; prefer 16 kHz, fall back to the universal 48 kHz.
+  let rate = 16000;
+  const cfg = (r) => ({ codec: "opus", sampleRate: r, numberOfChannels: 1, bitrate: 32000 });
+  let sup = await AudioEncoder.isConfigSupported(cfg(rate)).catch(() => null);
+  if (!sup?.supported) {
+    rate = 48000;
+    sup = await AudioEncoder.isConfigSupported(cfg(rate)).catch(() => null);
+    if (!sup?.supported) return null;
+  }
+  const probeAC = new (window.AudioContext || window.webkitAudioContext)();
+  let decoded;
+  try { decoded = await probeAC.decodeAudioData(await file.arrayBuffer()); }
+  finally { probeAC.close(); }
+  const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * rate), rate);
+  const src = off.createBufferSource(); src.buffer = decoded; src.connect(off.destination); src.start();
+  const mono = (await off.startRendering()).getChannelData(0);
+
+  const muxer = new WebMMuxer.Muxer({
+    target: new WebMMuxer.ArrayBufferTarget(),
+    audio: { codec: "A_OPUS", sampleRate: rate, numberOfChannels: 1 },
+  });
+  let encErr = null;
+  const enc = new AudioEncoder({
+    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+    error: (e) => { encErr = e; },
+  });
+  enc.configure(cfg(rate));
+  for (let i = 0; i < mono.length && !encErr; i += rate) {   // 1-second slices
+    const slice = mono.subarray(i, Math.min(i + rate, mono.length));
+    const ad = new AudioData({
+      format: "f32-planar", sampleRate: rate, numberOfChannels: 1,
+      numberOfFrames: slice.length, timestamp: Math.round((i / rate) * 1e6), data: slice,
+    });
+    enc.encode(ad); ad.close();
+  }
+  await enc.flush(); enc.close();
+  if (encErr) throw encErr;
+  muxer.finalize();
+  return new Blob([muxer.target.buffer], { type: "audio/webm" });
+}
+
 // ---------- File flow (manual) ----------
-function pickFile(f) {
+let pickSeq = 0;   // ignore stale async compressions when a newer file is picked
+async function pickFile(f) {
   if (!f) return;
-  blobToSend = f; inputName = (f.name || "audio").replace(/\.[^.]+$/, "");
-  const isTooBig = f.size > MAX_AUDIO_BYTES;
-  ui.fileinfo.textContent = `${f.name} · ${fmtBytes(f.size)} (max ${MAX_AUDIO_LABEL})`;
-  if (isTooBig) {
+  const seq = ++pickSeq;
+  inputName = (f.name || "audio").replace(/\.[^.]+$/, "");
+  let out = f;
+  if (f.size > COMPRESS_THRESHOLD) {
+    blobToSend = null; ui.go.disabled = true;
+    ui.fileinfo.textContent = `${f.name} · ${fmtBytes(f.size)} · compressing…`;
+    setStatus("Compressing audio in browser…");
+    try {
+      const small = await compressAudioFile(f);
+      if (small && small.size < f.size * 0.9) { small.name = `${inputName}.webm`; out = small; }
+    } catch { /* not decodable as audio (e.g. video-only mp4) — upload original */ }
+    if (seq !== pickSeq) return;
+  }
+  blobToSend = out;
+  const note = out !== f ? ` (compressed from ${fmtBytes(f.size)})` : "";
+  ui.fileinfo.textContent = `${f.name} · ${fmtBytes(out.size)}${note} (max ${MAX_AUDIO_LABEL})`;
+  if (out.size > MAX_AUDIO_BYTES) {
     blobToSend = null;
     ui.go.disabled = true;
     setStatus(`File too large. Max upload size is ${MAX_AUDIO_LABEL}.`, true);
     return;
   }
   ui.go.disabled = false;
-  setStatus("File ready. Click “Transcribe file”.");
+  setStatus(out !== f
+    ? `Compressed ${fmtBytes(f.size)} → ${fmtBytes(out.size)} ✓ Click “Transcribe file”.`
+    : "File ready. Click “Transcribe file”.");
 }
 ui.drop.addEventListener("click", () => ui.file.click());
 ui.file.addEventListener("change", (e) => pickFile(e.target.files[0]));
@@ -584,7 +901,11 @@ ui.micBtn.addEventListener("click", async () => {
   micAC.createMediaStreamSource(micStream).connect(analyser);
   drawLiveWave(analyser);
   chunks = [];
-  mediaRec = new MediaRecorder(micStream);
+  // 32 kbps Opus mono is plenty for STT — the server downmixes to 16 kHz mono
+  // WAV anyway, so the browser default (~128 kbps) just wastes upload time.
+  const recMime = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"]
+    .find(t => MediaRecorder.isTypeSupported(t));
+  mediaRec = new MediaRecorder(micStream, { ...(recMime && { mimeType: recMime }), audioBitsPerSecond: 32000 });
   mediaRec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
   mediaRec.onstop = () => {
     stopLiveWave();
@@ -592,7 +913,7 @@ ui.micBtn.addEventListener("click", async () => {
     if (micAC) { micAC.close(); micAC = null; }
     ui.micBtn.textContent = "● Record"; ui.micBtn.classList.remove("rec");
     const type = mediaRec.mimeType || "audio/webm";
-    const ext = type.includes("ogg") ? "ogg" : "webm";
+    const ext = type.includes("ogg") ? "ogg" : type.includes("mp4") ? "m4a" : "webm";
     blobToSend = new Blob(chunks, { type }); blobToSend.name = `mic-recording.${ext}`;
     inputName = "mic-recording";
     ui.micState.textContent = "recorded ✓";
@@ -629,7 +950,7 @@ async function transcribe() {
   setBusy(true);
   ui.out.classList.remove("muted"); ui.out.textContent = "";
   ui.segs.textContent = "—"; ui.stat.textContent = "";
-  ui.dlTxt.classList.add("hidden"); ui.dlSrt.classList.add("hidden");
+  ui.dlTxt.classList.add("hidden"); ui.dlSrt.classList.add("hidden"); ui.copyBtn.classList.add("hidden");
   setProgress(0, "Uploading audio…");
   try {
     const fd = new FormData();
@@ -699,6 +1020,7 @@ function fmtMs(ms, srt = false) {
 function renderResult(p) {
   const text = (p.text || "").trim();
   ui.out.textContent = text || "(no speech detected)";
+  ui.copyBtn.classList.toggle("hidden", !text);
   const segs = p.segments || [];
   if (segs.length) {
     ui.segs.innerHTML = "";
@@ -786,7 +1108,14 @@ async function renderHistory() {
   _historyUrls.forEach(u => URL.revokeObjectURL(u));
   _historyUrls = [];
   const records = await dbGetAll().catch(() => []);
-  if (!records.length) { ui.historyPanel.classList.add("hidden"); return; }
+  ui.historyCount.textContent = records.length;
+  ui.historyCount.classList.toggle("hidden", !records.length);
+  if (!records.length) {
+    ui.historyPanel.classList.add("hidden");
+    ui.historyEmpty.classList.remove("hidden");
+    return;
+  }
+  ui.historyEmpty.classList.add("hidden");
   ui.historyPanel.classList.remove("hidden");
   ui.historyList.innerHTML = "";
   [...records].reverse().forEach(rec => {
@@ -801,6 +1130,7 @@ async function renderHistory() {
         `<span class="pill">${rec.model || "?"}</span>` +
         `<span class="pill">${rec.lang || "auto"}</span>` +
         `<span class="muted" style="font-size:11px">${fmtBytes(rec.blob.size)}</span>` +
+        (rec.transcript ? `<button class="history-copy btn btn-ghost btn-sm" type="button" aria-label="Copy transcript">⎘ Copy</button>` : "") +
         `<button class="history-del" data-id="${rec.id}" title="Delete">✕</button>` +
       `</div>` +
       `<audio controls src="${url}" class="history-audio"></audio>` +
@@ -809,6 +1139,10 @@ async function renderHistory() {
       await dbDelete(rec.id);
       renderHistory();
     });
+    if (rec.transcript) {
+      const copyBtn = div.querySelector(".history-copy");
+      copyBtn.addEventListener("click", () => copyText(rec.transcript, copyBtn));
+    }
     ui.historyList.appendChild(div);
   });
 }
@@ -827,17 +1161,30 @@ document.querySelectorAll(".tabs").forEach(bar => {
     if (!btn) return;
     bar.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
-    const group = btn.closest(".api-endpoint") || btn.closest(".panel");
+    const group = btn.closest(".api-endpoint") || btn.closest(".card");
     group.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
     group.querySelector("#" + btn.dataset.tab)?.classList.add("active");
   });
 });
 
-// ---------- PWA ----------
+// ---------- PWA: register + force-reload on update (DESIGN.md §6) ----------
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  // Reload once when a NEW service worker takes control (i.e. a deploy landed).
+  // hadController distinguishes an update from the very first SW install.
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController) { hadController = true; return; }
+    // Never destroy in-flight work — the next update check retries the reload.
+    if (transcribing || (mediaRec && mediaRec.state === "recording")) return;
+    location.reload();
+  });
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
-    setInterval(() => navigator.serviceWorker.getRegistration().then(r => r && r.update()), 3600000);
+    const ping = () => navigator.serviceWorker.getRegistration().then(r => r && r.update()).catch(() => {});
+    setInterval(ping, 3600000);                                  // hourly
+    document.addEventListener("visibilitychange", () => {        // iOS standalone resume
+      if (document.visibilityState === "visible") ping();
+    });
   });
 }
 let deferredPrompt = null;
