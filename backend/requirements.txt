@@ -4,3 +4,7 @@ python-multipart>=0.0.9,<1.0.0
 faster-whisper>=1.0.3,<2.0.0
 langdetect>=1.0.9,<2.0.0
 redis>=5.0.0,<6.0.0
+# Speaker diarization ("who spoke when"). Heavy: pulls torch (~several hundred MB).
+# Also needs an HF token + accepting model terms on huggingface.co — see diarize.py.
+# Comment out this line if you don't need speaker labels.
+pyannote.audio>=3.1,<4.0

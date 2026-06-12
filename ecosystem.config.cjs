@@ -20,6 +20,10 @@ module.exports = {
         ENABLE_CHUNK_TRANSCRIPTION: "1",
         CHUNK_SECONDS: "180",
         CHUNK_OVERLAP_SECONDS: "5",
+        // Speaker diarization (pyannote). Models pre-warmed into HF_HOME above;
+        // HF_HUB_OFFLINE=1 runs them from cache with no token / no network.
+        ENABLE_DIARIZATION: "1",
+        HF_HUB_OFFLINE: "1",
         REDIS_URL: "redis://127.0.0.1:6379/0",
         // whisper.cpp engine (Metal GPU) — auto-detected if binary exists
         WHISPER_CPP_DIR: "/Users/yapweijun/Documents/GitHub/Local-STT-Demo/backend/vendor/whisper.cpp",

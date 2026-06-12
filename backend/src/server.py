@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import diarize as diarization
 from .transcribe import convert_to_wav, transcribe as faster_transcribe
 from .whisper_cpp import has_gpu as cpp_has_gpu
 from .whisper_cpp import installed_models as cpp_models
@@ -59,6 +60,9 @@ UPLOADS_MAX_BYTES = int(os.environ.get("UPLOADS_MAX_BYTES", str(5 * 1024 * 1024 
 ENABLE_CHUNK_TRANSCRIPTION = os.environ.get("ENABLE_CHUNK_TRANSCRIPTION", "1") != "0"
 CHUNK_SECONDS = max(1, int(os.environ.get("CHUNK_SECONDS", "180")))
 CHUNK_OVERLAP_SECONDS = max(0, int(os.environ.get("CHUNK_OVERLAP_SECONDS", "5")))
+# Speaker diarization (pyannote). Off by default per-request; this env is the
+# server-wide kill switch. Requires pyannote.audio + HF_TOKEN (see diarize.py).
+ENABLE_DIARIZATION = os.environ.get("ENABLE_DIARIZATION", "1") != "0"
 
 MODEL_REGISTRY = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
 _FW_REPO = {k: "Systran" for k in MODEL_REGISTRY}
@@ -457,6 +461,7 @@ async def health():
         "chunkSeconds": CHUNK_SECONDS,
         "chunkOverlapSeconds": CHUNK_OVERLAP_SECONDS,
         "engines": engines,
+        "diarization": {"enabled": ENABLE_DIARIZATION, **diarization.status()},
     }
 
 
@@ -469,6 +474,7 @@ async def api_transcribe(
     engine: str = Form(""),
     useGpu: str = Form("1"),
     prompt: str = Form(""),
+    diarize: str = Form("0"),
 ):
     redis_error = _require_redis_response()
     if redis_error is not None:
@@ -552,6 +558,7 @@ async def api_transcribe(
         "engineName": engine_name,
         "useGpu": useGpu == "1",
         "prompt": prompt.strip() or None,
+        "diarize": ENABLE_DIARIZATION and diarize == "1",
         "chunkSeconds": CHUNK_SECONDS,
         "chunkOverlapSeconds": CHUNK_OVERLAP_SECONDS,
         "chunkTranscriptionEnabled": ENABLE_CHUNK_TRANSCRIPTION,
@@ -883,6 +890,25 @@ def _run_chunked_transcription(job_id: str, job: dict[str, Any]) -> dict[str, An
     finally:
         _safe_rmtree(chunk_dir)
 
+    # ── Speaker diarization (optional) ─────────────────────────────────
+    # Run once on the WHOLE wav (global timestamps), then tag the already-merged
+    # segments. Best-effort: failure here must not drop the transcript.
+    speaker_count = 0
+    diarize_requested = bool(job.get("diarize"))
+    if diarize_requested and all_segments:
+        if diarization.is_available():
+            _job_update(job_id, {"status": "running", "stage": "diarizing"})
+            try:
+                turns = diarization.diarize_file(wav_path)
+                speaker_count = diarization.assign_speakers(all_segments, turns)
+                log.info("diarization: %s tagged %d speakers over %d turns",
+                         job_id, speaker_count, len(turns))
+            except Exception as exc:
+                log.error("diarization: unexpected failure on %s (%s)", job_id, exc)
+        else:
+            log.warning("diarization requested but unavailable (%s)",
+                        diarization.status().get("reason"))
+
     text = " ".join(s["text"] for s in all_segments).strip()
     return {
         "id": job_id,
@@ -896,6 +922,8 @@ def _run_chunked_transcription(job_id: str, job: dict[str, Any]) -> dict[str, An
         "completedChunks": total_chunks,
         "chunkSeconds": CHUNK_SECONDS,
         "audioDurationSeconds": duration_s,
+        "diarized": diarize_requested and speaker_count > 0,
+        "speakerCount": speaker_count,
         "files": {"originalName": job.get("originalName") or "audio"},
     }
 

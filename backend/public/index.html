@@ -236,6 +236,7 @@
   .seg { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); }
   .seg:last-child { border-bottom: none; }
   .seg .t { color: var(--primary); font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; padding-top: 2px; }
+  .seg .spk { align-self: flex-start; flex: none; font-size: 11px; font-weight: 600; line-height: 1.6; padding: 0 7px; border-radius: 999px; white-space: nowrap; color: var(--primary); background: color-mix(in srgb, var(--primary) 14%, transparent); border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent); }
   a.dl { color: var(--success); text-decoration: none; font-size: 13.5px; font-weight: 600; }
   a.dl:hover { text-decoration: underline; }
   #copyBtn, .history-copy { font-size: 13px; }
@@ -386,6 +387,10 @@
               </label>
               <div class="field"><span class="field-label">Compute</span>
                 <span class="check"><input type="checkbox" id="useGpu" checked disabled /> GPU / Metal (forced)</span>
+              </div>
+              <div class="field"><span class="field-label">Speakers</span>
+                <span class="check"><input type="checkbox" id="diarize" /> Detect speakers (diarization)</span>
+                <p id="diarizeInfo" class="muted" style="margin:2px 0 0;font-size:12px">Labels each segment with Speaker 1 / 2 / …</p>
               </div>
             </div>
             <label class="field mt-12"><span class="field-label">Prompt (optional — proper nouns / domain terms)</span>
@@ -605,7 +610,7 @@ print(r.json()["text"])</pre></div>
 <script>
 const $ = (id) => document.getElementById(id);
 const ui = {
-  model: $("model"), lang: $("lang"), useGpu: $("useGpu"), prompt: $("prompt"),
+  model: $("model"), lang: $("lang"), useGpu: $("useGpu"), prompt: $("prompt"), diarize: $("diarize"),
   drop: $("drop"), file: $("file"), fileinfo: $("fileinfo"),
   micBtn: $("micBtn"), micState: $("micState"), go: $("go"), waveMic: $("waveMic"),
   micPlayback: $("micPlayback"),
@@ -991,6 +996,7 @@ async function transcribe() {
     fd.append("model", ui.model.value);
     fd.append("language", ui.lang.value.trim() || "auto");
     fd.append("useGpu", ui.useGpu.checked ? "1" : "0");
+    fd.append("diarize", ui.diarize.checked ? "1" : "0");
     if (ui.prompt.value.trim()) fd.append("prompt", ui.prompt.value.trim());
 
     // Real upload progress + chips, then an indeterminate "server is transcribing" phase.
@@ -1119,14 +1125,18 @@ function renderResult(p) {
     ui.segs.innerHTML = "";
     segs.forEach(c => {
       const div = document.createElement("div"); div.className = "seg";
-      div.innerHTML = `<span class="t">${fmtMs(c.startMs)}→${fmtMs(c.endMs)}</span><span></span>`;
-      div.children[1].textContent = (c.text || "").trim();
+      const spk = c.speaker ? `<span class="spk">${escapeHtml(c.speaker)}</span>` : "";
+      div.innerHTML = `<span class="t">${fmtMs(c.startMs)}→${fmtMs(c.endMs)}</span>${spk}<span></span>`;
+      div.lastElementChild.textContent = (c.text || "").trim();
       ui.segs.appendChild(div);
     });
   } else ui.segs.textContent = "(no segments)";
-  makeDownload(ui.dlTxt, text + "\n", inputName + ".txt");
+  makeDownload(ui.dlTxt, segsToText(segs, text), inputName + ".txt");
   let srt = "";
-  segs.forEach((c, i) => { srt += `${i + 1}\n${fmtMs(c.startMs, true)} --> ${fmtMs(c.endMs ?? c.startMs, true)}\n${(c.text || "").trim()}\n\n`; });
+  segs.forEach((c, i) => {
+    const tag = c.speaker ? `${c.speaker}: ` : "";
+    srt += `${i + 1}\n${fmtMs(c.startMs, true)} --> ${fmtMs(c.endMs ?? c.startMs, true)}\n${tag}${(c.text || "").trim()}\n\n`;
+  });
   if (segs.length) makeDownload(ui.dlSrt, srt, inputName + ".srt");
 }
 function renderPartial(p) {
@@ -1146,8 +1156,9 @@ function renderPartial(p) {
     ui.segs.innerHTML = "";
     segs.forEach(c => {
       const div = document.createElement("div"); div.className = "seg";
-      div.innerHTML = `<span class="t">${fmtMs(c.startMs)}→${fmtMs(c.endMs ?? c.startMs)}</span><span></span>`;
-      div.children[1].textContent = (c.text || "").trim();
+      const spk = c.speaker ? `<span class="spk">${escapeHtml(c.speaker)}</span>` : "";
+      div.innerHTML = `<span class="t">${fmtMs(c.startMs)}→${fmtMs(c.endMs ?? c.startMs)}</span>${spk}<span></span>`;
+      div.lastElementChild.textContent = (c.text || "").trim();
       ui.segs.appendChild(div);
     });
   } else {
@@ -1157,6 +1168,24 @@ function renderPartial(p) {
   const done = Number(p.completedChunks) || 0;
   const total = Number(p.totalChunks) || 0;
   ui.stat.textContent = total ? `partial · ${done}/${total} chunks` : "partial";
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, ch =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+// Plain-text transcript. When diarized, group consecutive same-speaker segments
+// into readable "Speaker N: …" paragraphs; otherwise fall back to flat text.
+function segsToText(segs, flatText) {
+  if (!segs.some(c => c.speaker)) return (flatText || "") + "\n";
+  let out = "", cur = null, buf = [];
+  const flush = () => { if (buf.length) out += `${cur}: ${buf.join(" ")}\n`; };
+  segs.forEach(c => {
+    const spk = c.speaker || "Speaker ?";
+    if (spk !== cur) { flush(); cur = spk; buf = []; }
+    const t = (c.text || "").trim(); if (t) buf.push(t);
+  });
+  flush();
+  return out;
 }
 function makeDownload(el, content, filename) {
   el.href = URL.createObjectURL(new Blob([content], { type: "text/plain" }));
