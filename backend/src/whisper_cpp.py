@@ -68,6 +68,7 @@ def transcribe_cpp(
     language: str = "auto",
     use_gpu: bool = True,
     prompt: str | None = None,
+    timeout: int | None = None,
 ) -> dict:
     """Transcribe via whisper-cli subprocess.
 
@@ -77,6 +78,7 @@ def transcribe_cpp(
         language: ISO 639-1 or "auto".
         use_gpu: if True, omit -ng flag (lets Metal run).
         prompt: optional initial prompt.
+        timeout: optional subprocess timeout in seconds. None means no timeout.
 
     Returns:
         dict with text, language, segments, model keys.
@@ -104,7 +106,7 @@ def transcribe_cpp(
     if prompt:
         args.extend(["--prompt", prompt])
 
-    proc = subprocess.run(args, capture_output=True, text=True)
+    proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
 
     if proc.returncode != 0:
         raise RuntimeError(f"whisper-cli exited {proc.returncode}: {proc.stderr[:500]}")

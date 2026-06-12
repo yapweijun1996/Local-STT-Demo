@@ -697,7 +697,20 @@ function fmtBytes(bytes) {
 function fmtSeconds(sec) {
   const s = Math.max(0, Math.round(sec));
   if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60); return `${m}m ${s % 60}s`;
+  if (s < 3600) {
+    const m = Math.floor(s / 60);
+    return `${m}m ${s % 60}s`;
+  }
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const rem = s % 60;
+  return `${h}h ${m}m ${rem}s`;
+}
+function fmtDurationMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n < 0) return "--";
+  if (n < 1000) return `${Math.round(n)} ms`;
+  return fmtSeconds(n / 1000);
 }
 function setDownloadStats(chips) {
   if (!ui.progStats) return;
@@ -729,6 +742,7 @@ function stopLiveWave() {
 
 // ---------- Theme ----------
 const THEME_KEY = "stt-theme";
+const ACTIVE_JOB_KEY = "stt-active-job";
 const themeMeta = document.querySelector('meta[name="theme-color"]');
 const themeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 let themeMode = (() => { try { const s = localStorage.getItem(THEME_KEY); return (s === "light" || s === "dark" || s === "system") ? s : "system"; } catch { return "system"; } })();
@@ -739,6 +753,25 @@ function applyTheme(m) {
   if (themeMeta) themeMeta.content = r === "dark" ? "#0e1015" : "#f3f5f9";
   ui.themeToggle.textContent = r === "dark" ? "☀️" : "🌙";
   try { localStorage.setItem(THEME_KEY, m); } catch {}
+}
+function saveActiveJob(jobId) {
+  try { localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({ jobId, ts: Date.now() })); } catch {}
+}
+function clearActiveJob(jobId = null) {
+  try {
+    if (!jobId) {
+      localStorage.removeItem(ACTIVE_JOB_KEY);
+      return;
+    }
+    const active = JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY) || "{}");
+    if (active.jobId === jobId) localStorage.removeItem(ACTIVE_JOB_KEY);
+  } catch { localStorage.removeItem(ACTIVE_JOB_KEY); }
+}
+function getActiveJob() {
+  try {
+    const active = JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY) || "{}");
+    return active.jobId || null;
+  } catch { return null; }
 }
 ui.themeToggle.addEventListener("click", () => applyTheme(resolveTheme(themeMode) === "dark" ? "light" : "dark"));
 function copyText(text, btn) {
@@ -963,9 +996,9 @@ async function transcribe() {
     // Real upload progress + chips, then an indeterminate "server is transcribing" phase.
     let lastT = performance.now(), lastLoaded = 0, speed = 0;
     const p = await postTranscribe(fd, (loaded, total) => {
-      if (loaded < 0) {                          // upload finished → server working
+      if (loaded < 0) {                          // upload finished → server queued/working
         setDownloadStats([]); setBusy(true);
-        setStatus("Transcribing on server…");
+        setStatus("Queued — waiting for worker…");
         return;
       }
       const now = performance.now();
@@ -977,7 +1010,7 @@ async function transcribe() {
       setDownloadStats(chips);
     });
     renderResult(p);
-    ui.stat.textContent = `${p.model} · ${p.language} · ${p.durationMs} ms`;
+    ui.stat.textContent = `${p.model} · ${p.language} · ${fmtDurationMs(p.durationMs)}`;
     setStatus("Done ✓ — processed locally on the server, audio deleted after.");
     // Update history record with transcript
     if (_pendingHistoryId != null) {
@@ -993,21 +1026,81 @@ async function transcribe() {
   }
 }
 
-// POST audio to the backend with real upload progress (fetch has no upload progress).
+// POST audio → get jobId immediately → poll until done.
+// This avoids Cloudflare 524 (100s proxy timeout) for long transcriptions.
 function postTranscribe(fd, onUp) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/transcribe");
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) onUp(e.loaded, e.total); };
     xhr.upload.onload = () => onUp(-1, -1);
-    xhr.onload = () => {
+    xhr.onload = async () => {
       let body = {}; try { body = JSON.parse(xhr.responseText); } catch {}
-      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
-      else reject(new Error(body.error || `HTTP ${xhr.status}`));
+      if (!(xhr.status >= 200 && xhr.status < 300)) {
+        return reject(new Error(body.error || `HTTP ${xhr.status}`));
+      }
+      if (!body.jobId) {
+        // Legacy: server returned result directly
+        return resolve(body);
+      }
+      saveActiveJob(body.jobId);
+      try { resolve(await _pollJob(body.jobId)); }
+      catch (e) { reject(e); }
     };
     xhr.onerror = () => reject(new Error("network error"));
     xhr.send(fd);
   });
+}
+
+// Poll GET /api/job/{jobId} every 1.5s until status is done or error.
+// Shows a logarithmic fake-progress bar (5 → 90%) and elapsed-time chip while waiting.
+async function _pollJob(jobId, maxMs = 12 * 60 * 60 * 1000) {
+  const start = Date.now();
+  const deadline = start + maxMs;
+  // Immediate visual: leave the indeterminate bar running for the first tick
+  setProgress(5, "Job queued — worker starting…");
+  setDownloadStats(["waiting…"]);
+
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 1500));
+    const clientElapsed = (Date.now() - start) / 1000;
+
+    let r, data;
+    try {
+      r = await fetch(`/api/job/${jobId}`);
+      data = await r.json();
+    } catch { continue; }  // transient network glitch — keep trying
+
+    if (r.ok && data.text !== undefined) {
+      setProgress(100, "Finalizing…");
+      clearActiveJob(jobId);
+      return data;
+    }
+    if (r.ok && data.status === "queued") {
+      const pos = data.queuePosition ? `position #${data.queuePosition}` : "waiting";
+      setProgress(5, `Queued · ${pos}`);
+      setDownloadStats([`${data.queuedCount ?? 0} queued`, `${data.runningCount ?? 0} running`]);
+      continue;
+    }
+    if (r.ok && data.status === "running") {
+      const startedAt = Number(data.startedAt);
+      const elapsed = Number.isFinite(startedAt) ? (Date.now() / 1000) - startedAt : clientElapsed;
+      const total = Number(data.totalChunks) || 0;
+      const done = Number(data.completedChunks) || 0;
+      const current = Number(data.currentChunk) || Math.min(done + 1, total || 1);
+      const progress = total > 0
+        ? Math.min(95, 5 + (done / total) * 90)
+        : 5 + 85 * (1 - Math.exp(-Math.max(0, elapsed) / 120));
+      setProgress(progress, total > 0 ? `Chunk ${current}/${total} · transcribing…` : "Transcribing on server…");
+      setDownloadStats([`${fmtSeconds(elapsed)} elapsed`, `${done}/${total || "?"} chunks`, `${data.runningCount ?? 1} running`]);
+      renderPartial(data);
+      continue;
+    }
+    if (r.ok && data.status === "pending") continue;
+    if (!r.ok) clearActiveJob(jobId);
+    throw new Error(data.error || `HTTP ${r.status}`);
+  }
+  throw new Error("Still transcribing after 12h. Keep the job ID and check server status.");
 }
 
 // ---------- Render + export ----------
@@ -1036,9 +1129,72 @@ function renderResult(p) {
   segs.forEach((c, i) => { srt += `${i + 1}\n${fmtMs(c.startMs, true)} --> ${fmtMs(c.endMs ?? c.startMs, true)}\n${(c.text || "").trim()}\n\n`; });
   if (segs.length) makeDownload(ui.dlSrt, srt, inputName + ".srt");
 }
+function renderPartial(p) {
+  const text = (p.partialText || "").trim();
+  if (text) {
+    ui.out.classList.remove("muted");
+    ui.out.textContent = text;
+    ui.copyBtn.classList.remove("hidden");
+  } else {
+    ui.out.classList.add("muted");
+    ui.out.textContent = "— waiting for first chunk —";
+    ui.copyBtn.classList.add("hidden");
+  }
+
+  const segs = p.partialSegments || [];
+  if (segs.length) {
+    ui.segs.innerHTML = "";
+    segs.forEach(c => {
+      const div = document.createElement("div"); div.className = "seg";
+      div.innerHTML = `<span class="t">${fmtMs(c.startMs)}→${fmtMs(c.endMs ?? c.startMs)}</span><span></span>`;
+      div.children[1].textContent = (c.text || "").trim();
+      ui.segs.appendChild(div);
+    });
+  } else {
+    ui.segs.textContent = "(no completed chunks yet)";
+  }
+
+  const done = Number(p.completedChunks) || 0;
+  const total = Number(p.totalChunks) || 0;
+  ui.stat.textContent = total ? `partial · ${done}/${total} chunks` : "partial";
+}
 function makeDownload(el, content, filename) {
   el.href = URL.createObjectURL(new Blob([content], { type: "text/plain" }));
   el.download = filename; el.classList.remove("hidden");
+}
+
+async function resumeActiveJob() {
+  const jobId = getActiveJob();
+  if (!jobId || transcribing) return;
+  transcribing = true;
+  ui.go.disabled = true;
+  ui.go.textContent = "Transcribing…";
+  ui.micBtn.disabled = true;
+  ui.out.classList.remove("muted");
+  ui.out.textContent = "";
+  ui.segs.textContent = "—";
+  ui.stat.textContent = "";
+  ui.dlTxt.classList.add("hidden");
+  ui.dlSrt.classList.add("hidden");
+  ui.copyBtn.classList.add("hidden");
+  setBusy(true);
+  setProgress(5, "Restoring active job…");
+  try {
+    const result = await _pollJob(jobId);
+    renderResult(result);
+    ui.stat.textContent = `${result.model} · ${result.language} · ${fmtDurationMs(result.durationMs)}`;
+    setStatus("Done ✓ — processed locally on the server, audio deleted after.");
+  } catch (e) {
+    clearActiveJob(jobId);
+    setStatus("Failed: " + (e.message || e), true);
+  } finally {
+    transcribing = false;
+    ui.go.disabled = false;
+    ui.go.textContent = "Transcribe file";
+    ui.micBtn.disabled = false;
+    setBusy(false);
+    setDownloadStats([]);
+  }
 }
 
 // ---------- IndexedDB Recording History ----------
@@ -1153,6 +1309,7 @@ ui.clearHistoryBtn.addEventListener("click", async () => {
 });
 let _pendingHistoryId = null;
 openDB().then(renderHistory).catch(() => {});
+resumeActiveJob();
 
 // ---------- API Reference tabs ----------
 document.querySelectorAll(".tabs").forEach(bar => {
