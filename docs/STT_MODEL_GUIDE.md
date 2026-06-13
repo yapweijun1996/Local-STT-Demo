@@ -1,6 +1,6 @@
 # STT Model Choice Guide
 
-_Updated 2026-06-07._ This repo has two transcription paths; pick the model per path.
+_Updated 2026-06-13._ This repo has two transcription paths; pick the model per path.
 
 ## Browser demo (Transformers.js + ONNX, WebGPU/WASM)
 
@@ -39,9 +39,25 @@ to a friendly "too heavy — try turbo" message.
   interrupted file re-downloads.
 - After the first download the model is cached and works fully offline.
 
-## Node backend (whisper.cpp + ffmpeg)
+## Node backend — two engines (whisper.cpp vs faster-whisper)
 
-The backend runs native whisper.cpp (Metal on macOS, CPU elsewhere), so large models are fine.
+The backend exposes **two transcription engines**, selectable per request via the `engine`
+form field on `/api/transcribe` and via the **Engine dropdown** in the web UI. `/health`
+reports which engines + models are installed.
+
+| Engine | Hardware path | Speed (Apple Silicon) | Pick it for |
+|---|---|---|---|
+| `whisper-cpp` (default) | **Metal GPU** on macOS | fast | everyday use on this Mac deployment |
+| `faster-whisper` | **CPU / int8** on macOS (CUDA float16 on NVIDIA) | slow on Mac | code-switching, or when run on a CUDA server |
+
+**Benchmark (verified 2026-06-13, jfk.wav ~11 s, large-v3, this Mac):** whisper-cpp Metal
+transcribes in ~1.1 s vs faster-whisper CPU ~14.5 s — **~13× faster**. Accuracy is identical
+(same weights). On Apple Silicon, prefer `whisper-cpp`; `faster-whisper` only wins on NVIDIA.
+The UI shows a "CPU-only, ~13× slower, be patient" warning when faster-whisper is selected.
+
+### Models per engine
+
+whisper.cpp uses `ggml-*.bin` files (Metal):
 
 | Model alias | Use it for |
 |---|---|
@@ -52,6 +68,12 @@ The backend runs native whisper.cpp (Metal on macOS, CPU elsewhere), so large mo
 
 Install extra models: `WHISPER_MODELS="base small large-v3-turbo" npm run setup` (or set
 `WHISPER_MODELS` in `docker-compose.yml` for Docker). See [backend/README.md](../backend/README.md).
+
+faster-whisper uses CTranslate2 weights cached in `HF_HOME` (e.g.
+`Systran/faster-whisper-large-v3`, `mobiuslabsgmbh/faster-whisper-large-v3-turbo`).
+**Pre-download required** — the production server runs `HF_HUB_OFFLINE=1`, so a model that
+isn't already cached returns a clear `400` instead of fetching on demand. The UI only enables
+faster-whisper models that are actually installed; the API validates the same.
 
 ## Decision rule
 

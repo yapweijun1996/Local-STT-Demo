@@ -2,6 +2,31 @@
 
 Newest first. Scope: `backend/public/` live UI (stt.yapweijun1996.com) unless noted.
 
+## 2026-06-13 — User-selectable STT engine (whisper-cpp vs faster-whisper)
+
+- **UI (`backend/public/index.html`)**: new **Engine** selector in Settings — Auto (server
+  default) / `whisper-cpp · Metal GPU (fast)` / `faster-whisper · CPU (slower, be patient)`.
+  The Model dropdown now filters to models installed **for the chosen engine** (driven by
+  `/health` per-engine `installed` maps), auto-correcting the pick when the current model isn't
+  available on that engine. Selecting faster-whisper shows an amber warning ("CPU-only, ~13×
+  slower than Metal, long files take minutes") and forces `useGpu=0` on submit (whisper-cpp
+  requires GPU=1). Engine sent as the `engine` form field only when not Auto.
+- **Backend (`backend/src/server.py`)**: `/api/transcribe` validates `engine` — unknown engine
+  → `400`; `faster-whisper` + a model not pre-downloaded → `400` with a clear message (instead
+  of failing cryptically under `HF_HUB_OFFLINE=1`). Factored `_fw_model_installed()` helper,
+  reused by `/health`. The worker already dispatched to `faster_transcribe` for non-cpp engines.
+- **`backend/public/sw.js`**: VERSION bumped `2026-06-10-4` → `2026-06-13-1` so the new UI ships
+  past the PWA precache.
+- **Model**: pre-downloaded `Systran/faster-whisper-large-v3` (~3 GB) into pm2's
+  `HF_HOME=/Users/yapweijun/.cache/stt-models` so faster-whisper has at least large-v3 offline.
+- **Benchmark (this Mac, jfk.wav ~11 s, large-v3)**: whisper-cpp Metal ~1.1 s vs faster-whisper
+  CPU ~14.5 s = **~13× faster**, identical text. faster-whisper only wins on NVIDIA CUDA. See
+  [docs/STT_MODEL_GUIDE.md](docs/STT_MODEL_GUIDE.md).
+- **Verified end-to-end 2026-06-13**: API rejects `engine=bogus` + faster-whisper/`tiny`
+  (undownloaded); faster-whisper + large-v3 transcribes jfk.wav → correct text; UI engine/model
+  filtering + warning confirmed in Chrome (screenshot). pm2 `local-stt` (6601) restarted clean,
+  default engine still whisper-cpp.
+
 ## 2026-06-13 — Diarization offline mode (token-free runtime)
 
 - `diarize.py`: HF token is now only needed ONCE to download the gated models.
