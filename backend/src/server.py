@@ -86,6 +86,19 @@ def _fw_model_installed(model_name: str) -> bool:
         return False
     return any((snap / "model.bin").is_file() for snap in snapshots.iterdir())
 
+
+def _parse_speakers(raw: str) -> int | None:
+    """Parse the optional speaker-count hint. '' / 'auto' / '0' → None (let
+    pyannote estimate). 1..8 → exact count. Out-of-range/garbage → None."""
+    s = (raw or "").strip().lower()
+    if not s or s == "auto":
+        return None
+    try:
+        n = int(s)
+    except ValueError:
+        return None
+    return n if 1 <= n <= 8 else None
+
 # ── Redis keys ─────────────────────────────────────────────────────────
 JOB_PREFIX = "stt:job:"
 PENDING_QUEUE = "stt:queue:pending"
@@ -480,6 +493,7 @@ async def api_transcribe(
     useGpu: str = Form("1"),
     prompt: str = Form(""),
     diarize: str = Form("0"),
+    speakers: str = Form(""),
 ):
     redis_error = _require_redis_response()
     if redis_error is not None:
@@ -580,6 +594,7 @@ async def api_transcribe(
         "useGpu": useGpu == "1",
         "prompt": prompt.strip() or None,
         "diarize": ENABLE_DIARIZATION and diarize == "1",
+        "numSpeakers": _parse_speakers(speakers),
         "chunkSeconds": CHUNK_SECONDS,
         "chunkOverlapSeconds": CHUNK_OVERLAP_SECONDS,
         "chunkTranscriptionEnabled": ENABLE_CHUNK_TRANSCRIPTION,
@@ -920,10 +935,14 @@ def _run_chunked_transcription(job_id: str, job: dict[str, Any]) -> dict[str, An
         if diarization.is_available():
             _job_update(job_id, {"status": "running", "stage": "diarizing"})
             try:
-                turns = diarization.diarize_file(wav_path)
-                speaker_count = diarization.assign_speakers(all_segments, turns)
-                log.info("diarization: %s tagged %d speakers over %d turns",
-                         job_id, speaker_count, len(turns))
+                num_speakers = job.get("numSpeakers")
+                turns = diarization.diarize_file(
+                    wav_path,
+                    num_speakers=int(num_speakers) if num_speakers else None,
+                )
+                all_segments, speaker_count = diarization.assign_speakers(all_segments, turns)
+                log.info("diarization: %s tagged %d speakers over %d turns (hint=%s)",
+                         job_id, speaker_count, len(turns), num_speakers or "auto")
             except Exception as exc:
                 log.error("diarization: unexpected failure on %s (%s)", job_id, exc)
         else:

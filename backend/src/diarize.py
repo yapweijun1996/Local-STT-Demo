@@ -304,39 +304,136 @@ def _overlap_ms(a_start: int, a_end: int, b_start: int, b_end: int) -> int:
     return max(0, min(a_end, b_end) - max(a_start, b_start))
 
 
+# Tuning for segment splitting (precision vs. over-fragmentation):
+#   A segment is split only when it is GENUINELY shared — the dominant speaker
+#   holds less than this fraction of the overlapped time, and every resulting
+#   piece is at least _MIN_RUN_MS long. Conservative on purpose: most VAD
+#   segments are single-speaker, and over-splitting chops sentences mid-thought.
+_DOMINANCE = 0.85
+_MIN_RUN_MS = 800
+
+
+def _split_text_by_proportions(text: str, weights: list[float]) -> list[str]:
+    """Split text into len(weights) pieces, each getting a share of the WORDS
+    proportional to its weight, snapped to word boundaries. Pieces may be empty."""
+    words = text.split()
+    n = len(words)
+    if n == 0:
+        return ["" for _ in weights]
+    total = sum(weights) or 1.0
+    pieces: list[str] = []
+    idx = 0
+    acc = 0.0
+    for i, w in enumerate(weights):
+        acc += w
+        end = n if i == len(weights) - 1 else min(n, round(acc / total * n))
+        end = max(end, idx)  # never go backwards
+        pieces.append(" ".join(words[idx:end]))
+        idx = end
+    return pieces
+
+
+def _segment_runs(
+    s_start: int, s_end: int, turns: list[dict[str, Any]]
+) -> list[tuple[int, int, str]]:
+    """Speaker runs covering [s_start, s_end]: contiguous (start, end, speaker)
+    intervals from the overlapping diarization turns, adjacent same-speaker runs
+    merged, runs shorter than _MIN_RUN_MS folded into a neighbour."""
+    overlaps = []
+    for t in turns:
+        ov_s, ov_e = max(s_start, t["startMs"]), min(s_end, t["endMs"])
+        if ov_e > ov_s:
+            overlaps.append((ov_s, ov_e, t["speaker"]))
+    overlaps.sort()
+    runs: list[list[Any]] = []
+    for ov_s, ov_e, sp in overlaps:
+        if runs and runs[-1][2] == sp and ov_s <= runs[-1][1] + 50:
+            runs[-1][1] = max(runs[-1][1], ov_e)
+        else:
+            runs.append([ov_s, ov_e, sp])
+    # Fold sub-_MIN_RUN_MS runs into the longer adjacent neighbour.
+    changed = True
+    while changed and len(runs) > 1:
+        changed = False
+        for i, r in enumerate(runs):
+            if r[1] - r[0] >= _MIN_RUN_MS:
+                continue
+            left = runs[i - 1] if i > 0 else None
+            right = runs[i + 1] if i < len(runs) - 1 else None
+            keep = left if (left and (not right or (left[1] - left[0]) >= (right[1] - right[0]))) else right
+            keep[0], keep[1] = min(keep[0], r[0]), max(keep[1], r[1])
+            runs.pop(i)
+            # re-merge adjacent same-speaker after the fold
+            merged: list[list[Any]] = []
+            for rr in runs:
+                if merged and merged[-1][2] == rr[2]:
+                    merged[-1][1] = max(merged[-1][1], rr[1])
+                else:
+                    merged.append(rr)
+            runs[:] = merged
+            changed = True
+            break
+    return [(int(a), int(b), sp) for a, b, sp in runs]
+
+
 def assign_speakers(
     segments: list[dict[str, Any]],
     turns: list[dict[str, Any]],
-) -> int:
-    """Tag each transcript segment in-place with a "speaker" by max overlap with
-    the diarization turns. Falls back to the nearest turn by midpoint when a
-    segment overlaps none. Returns the number of distinct speakers assigned.
+) -> tuple[list[dict[str, Any]], int]:
+    """Tag transcript segments with speakers by overlap with diarization turns.
+
+    A segment that genuinely spans a speaker change (dominant speaker < _DOMINANCE
+    of overlapped time) is SPLIT at the turn boundaries so each piece carries one
+    speaker, with the text divided proportionally at word boundaries. Single-speaker
+    segments are tagged whole. Returns (new_segments, distinct_speaker_count).
     """
     if not turns:
-        return 0
+        return segments, 0
 
+    out: list[dict[str, Any]] = []
     seen: set[str] = set()
+
     for seg in segments:
         s_start = int(seg.get("startMs") or 0)
         s_end = int(seg.get("endMs") or s_start)
 
-        best_speaker = None
-        best_overlap = 0
-        for turn in turns:
-            ov = _overlap_ms(s_start, s_end, turn["startMs"], turn["endMs"])
-            if ov > best_overlap:
-                best_overlap = ov
-                best_speaker = turn["speaker"]
+        runs = _segment_runs(s_start, s_end, turns)
 
-        if best_speaker is None:
-            # No overlap (e.g. segment in a gap) — pick nearest turn by midpoint.
+        if not runs:
+            # No overlap (segment in a gap) — nearest turn by midpoint.
             mid = (s_start + s_end) / 2
-            best_speaker = min(
-                turns,
-                key=lambda t: abs(((t["startMs"] + t["endMs"]) / 2) - mid),
-            )["speaker"]
+            sp = min(turns, key=lambda t: abs(((t["startMs"] + t["endMs"]) / 2) - mid))["speaker"]
+            seg2 = dict(seg)
+            seg2["speaker"] = sp
+            out.append(seg2)
+            seen.add(sp)
+            continue
 
-        seg["speaker"] = best_speaker
-        seen.add(best_speaker)
+        # Dominant speaker share over the overlapped time.
+        by_speaker: dict[str, int] = {}
+        for a, b, sp in runs:
+            by_speaker[sp] = by_speaker.get(sp, 0) + (b - a)
+        covered = sum(by_speaker.values()) or 1
+        top_sp = max(by_speaker, key=by_speaker.get)
 
-    return len(seen)
+        if len(by_speaker) == 1 or by_speaker[top_sp] / covered >= _DOMINANCE:
+            seg2 = dict(seg)
+            seg2["speaker"] = top_sp
+            out.append(seg2)
+            seen.add(top_sp)
+            continue
+
+        # Genuine multi-speaker segment → split text across the runs.
+        texts = _split_text_by_proportions(str(seg.get("text") or ""), [b - a for a, b, _ in runs])
+        for (a, b, sp), piece in zip(runs, texts):
+            piece = piece.strip()
+            if not piece:
+                continue
+            seg2 = dict(seg)
+            seg2["startMs"], seg2["endMs"] = a, b
+            seg2["text"] = piece
+            seg2["speaker"] = sp
+            out.append(seg2)
+            seen.add(sp)
+
+    return out, len(seen)

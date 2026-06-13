@@ -398,7 +398,16 @@
               </div>
               <div class="field"><span class="field-label">Speakers</span>
                 <span class="check"><input type="checkbox" id="diarize" checked /> Detect speakers (diarization)</span>
-                <p id="diarizeInfo" class="muted" style="margin:2px 0 0;font-size:12px">Labels each segment with Speaker 1 / 2 / …</p>
+                <select id="speakers" style="margin-top:6px">
+                  <option value="">How many speakers? Auto-detect</option>
+                  <option value="1">1 speaker</option>
+                  <option value="2">2 speakers</option>
+                  <option value="3">3 speakers</option>
+                  <option value="4">4 speakers</option>
+                  <option value="5">5 speakers</option>
+                  <option value="6">6 speakers</option>
+                </select>
+                <p id="diarizeInfo" class="muted" style="margin:2px 0 0;font-size:12px">Tip: if you know the exact number (e.g. a 2-person interview), pick it — it's the biggest accuracy boost. Auto can mis-count.</p>
               </div>
             </div>
             <label class="field mt-12"><span class="field-label">Prompt (optional — proper nouns / domain terms)</span>
@@ -619,7 +628,7 @@ print(r.json()["text"])</pre></div>
 const $ = (id) => document.getElementById(id);
 const ui = {
   engine: $("engine"), engineInfo: $("engineInfo"),
-  model: $("model"), lang: $("lang"), useGpu: $("useGpu"), prompt: $("prompt"), diarize: $("diarize"),
+  model: $("model"), lang: $("lang"), useGpu: $("useGpu"), prompt: $("prompt"), diarize: $("diarize"), speakers: $("speakers"),
   drop: $("drop"), file: $("file"), fileinfo: $("fileinfo"),
   micBtn: $("micBtn"), micState: $("micState"), go: $("go"), waveMic: $("waveMic"),
   micPlayback: $("micPlayback"),
@@ -846,6 +855,9 @@ ui.copyBtn.addEventListener("click", () => {
 });
 applyTheme(themeMode);
 themeQuery.addEventListener?.("change", () => { if (themeMode === "system") applyTheme("system"); });
+const syncSpeakersEnabled = () => { ui.speakers.disabled = !ui.diarize.checked; };
+ui.diarize.addEventListener("change", syncSpeakersEnabled);
+syncSpeakersEnabled();
 ui.engine.addEventListener("change", applyEngine);
 ui.model.addEventListener("change", updateModelInfo);
 ui.useGpu.addEventListener("change", updateModelInfo);
@@ -1052,6 +1064,7 @@ async function transcribe() {
     // faster-whisper runs on CPU here; whisper-cpp requires GPU=1. Force GPU off for faster-whisper.
     fd.append("useGpu", (ui.engine.value === "faster-whisper") ? "0" : (ui.useGpu.checked ? "1" : "0"));
     fd.append("diarize", ui.diarize.checked ? "1" : "0");
+    if (ui.diarize.checked && ui.speakers.value) fd.append("speakers", ui.speakers.value);
     if (ui.prompt.value.trim()) fd.append("prompt", ui.prompt.value.trim());
 
     // Real upload progress + chips, then an indeterminate "server is transcribing" phase.
