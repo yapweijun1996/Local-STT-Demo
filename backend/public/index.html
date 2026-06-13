@@ -328,6 +328,24 @@
   }
   .tip:hover::after, .tip:focus-visible::after { opacity: 1; visibility: visible; transform: translateY(0); }
   #modeToggle svg, #installBtn svg { width: 19px; height: 19px; display: block; }
+
+  /* ───────── Transcript states ───────── */
+  /* Empty stat badge is just a weird floating shape — auto-hide it. */
+  #stat:empty { display: none; }
+  /* Transcript card: hidden when idle, skeleton while loading (no text yet),
+     real content once any text (partial or final) is available. */
+  #transcriptCard { display: none; }
+  #transcriptCard.is-loading, #transcriptCard.is-ready { display: block; }
+  #transcriptCard.is-loading #out, #transcriptCard.is-loading .seg-wrap { display: none; }
+  #transcriptCard:not(.is-loading) #transcriptSkeleton { display: none; }
+  .skeleton { display: flex; flex-direction: column; gap: 13px; padding: 6px 0; }
+  .sk-line { height: 14px; border-radius: 7px; background: var(--surface-2); position: relative; overflow: hidden; }
+  .sk-line::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--text) 9%, transparent), transparent);
+    animation: sk-shimmer 1.3s ease-in-out infinite; }
+  .sk-line.w90 { width: 90%; } .sk-line.w70 { width: 70%; } .sk-line.w50 { width: 50%; }
+  @keyframes sk-shimmer { 100% { transform: translateX(100%); } }
+  @media (prefers-reduced-motion: reduce) { .sk-line::after { animation: none; } }
 </style>
 </head>
 <body>
@@ -515,8 +533,8 @@
           </div>
         </div>
 
-        <!-- Output -->
-        <div class="card">
+        <!-- Output (hidden until a job runs) -->
+        <div class="card" id="transcriptCard">
           <div class="card-head">
             <h2 class="card-title">📝 Transcript</h2>
             <span class="pill" id="stat"></span>
@@ -526,8 +544,11 @@
             <a href="#" id="dlSrt" class="dl hidden">⬇ .srt</a>
           </div>
           <div class="card-body">
+            <div id="transcriptSkeleton" class="skeleton" aria-hidden="true">
+              <div class="sk-line w90"></div><div class="sk-line"></div><div class="sk-line w70"></div><div class="sk-line w50"></div>
+            </div>
             <div id="out" class="muted">— output will appear here —</div>
-            <details class="mt-12">
+            <details class="mt-12 seg-wrap">
               <summary class="muted" style="cursor:pointer">Timestamped segments</summary>
               <div id="segs" class="muted" style="margin-top:8px">—</div>
             </details>
@@ -691,6 +712,7 @@ const ui = {
   status: $("status"), statusValue: $("statusValue"), prog: $("prog"), stat: $("stat"), progStats: $("progStats"),
   modelInfo: $("modelInfo"),
   out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"), copyBtn: $("copyBtn"),
+  transcriptCard: $("transcriptCard"),
   health: $("health"), themeToggle: $("themeToggle"), installBtn: $("installBtn"),
   modeToggle: $("modeToggle"), ioRecordBtn: $("ioRecordBtn"), ioUploadBtn: $("ioUploadBtn"),
   ioRecordLbl: $("ioRecordLbl"), ioUploadLbl: $("ioUploadLbl"),
@@ -806,6 +828,14 @@ function setProgress(p, label, isErr = false) {
 function setBusy(on) {
   ui.prog.classList.toggle("indet", !!on);
   ui.statusValue.textContent = on ? "…%" : "0%";
+}
+// Transcript card visibility: 'idle' hides it, 'loading' shows a skeleton,
+// 'ready' shows the actual transcript. Keeps a brand-new page free of an empty
+// "— output will appear here —" slab.
+function setTranscriptState(state) {
+  const c = ui.transcriptCard; if (!c) return;
+  c.classList.toggle("is-loading", state === "loading");
+  c.classList.toggle("is-ready", state === "ready");
 }
 function fmtBytes(bytes) {
   const u = ["B", "KB", "MB", "GB"]; let b = Number(bytes);
@@ -1160,6 +1190,7 @@ async function transcribe() {
   ui.segs.textContent = "—"; ui.stat.textContent = "";
   ui.dlTxt.classList.add("hidden"); ui.dlSrt.classList.add("hidden"); ui.copyBtn.classList.add("hidden");
   setProgress(0, "Uploading audio…");
+  setTranscriptState("loading");
   try {
     const fd = new FormData();
     fd.append("audio", blobToSend, blobToSend.name || "audio");
@@ -1211,6 +1242,7 @@ async function transcribe() {
     ui.go.disabled = false; ui.go.textContent = "Transcribe file";
     ui.micBtn.disabled = false;
     setBusy(false); setDownloadStats([]);
+    if (!ui.out.textContent.trim()) setTranscriptState("idle");
   }
 }
 
@@ -1300,6 +1332,7 @@ function fmtMs(ms, srt = false) {
 }
 function renderResult(p) {
   const text = (p.text || "").trim();
+  setTranscriptState("ready");
   ui.out.textContent = text || "(no speech detected)";
   ui.copyBtn.classList.toggle("hidden", !text);
   const segs = p.segments || [];
@@ -1323,6 +1356,8 @@ function renderResult(p) {
 }
 function renderPartial(p) {
   const text = (p.partialText || "").trim();
+  // Keep the skeleton until the first words land; then swap to live partial text.
+  setTranscriptState(text ? "ready" : "loading");
   if (text) {
     ui.out.classList.remove("muted");
     ui.out.textContent = text;
@@ -1390,6 +1425,7 @@ async function resumeActiveJob() {
   ui.copyBtn.classList.add("hidden");
   setBusy(true);
   setProgress(5, "Restoring active job…");
+  setTranscriptState("loading");
   try {
     const result = await _pollJob(jobId);
     renderResult(result);
@@ -1405,6 +1441,7 @@ async function resumeActiveJob() {
     ui.micBtn.disabled = false;
     setBusy(false);
     setDownloadStats([]);
+    if (!ui.out.textContent.trim()) setTranscriptState("idle");
   }
 }
 
