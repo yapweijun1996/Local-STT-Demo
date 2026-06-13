@@ -346,6 +346,14 @@
           <div class="card-head"><h2 class="card-title">⚙️ Settings</h2></div>
           <div class="card-body">
             <div class="form-grid">
+              <label class="field"><span class="field-label">Engine</span>
+                <select id="engine">
+                  <option value="">Auto (server default)</option>
+                  <option value="whisper-cpp">whisper-cpp · Metal GPU (fast)</option>
+                  <option value="faster-whisper">faster-whisper · CPU (slower, be patient)</option>
+                </select>
+                <p id="engineInfo" class="muted" style="margin:2px 0 0;font-size:12px"></p>
+              </label>
               <label class="field"><span class="field-label">Model</span>
                 <select id="model">
                   <option value="large-v3">large-v3 (best quality)</option>
@@ -610,6 +618,7 @@ print(r.json()["text"])</pre></div>
 <script>
 const $ = (id) => document.getElementById(id);
 const ui = {
+  engine: $("engine"), engineInfo: $("engineInfo"),
   model: $("model"), lang: $("lang"), useGpu: $("useGpu"), prompt: $("prompt"), diarize: $("diarize"),
   drop: $("drop"), file: $("file"), fileinfo: $("fileinfo"),
   micBtn: $("micBtn"), micState: $("micState"), go: $("go"), waveMic: $("waveMic"),
@@ -658,14 +667,52 @@ const MODEL_INFO = {
 };
 const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
 const MAX_AUDIO_LABEL = fmtBytes(MAX_AUDIO_BYTES);
+// Health snapshot kept around so changing Engine can re-filter the Model list.
+const healthState = { fwMap: {}, cppMap: {}, fwAvail: false, cppAvail: false, defaultEngine: "whisper-cpp" };
+
+// Which engine the request will actually run on (resolve "Auto" to the server default).
+function effectiveEngine() {
+  return ui.engine.value || healthState.defaultEngine || "whisper-cpp";
+}
+
+// Installed-model map for the engine the request will run on.
+function activeInstalledMap() {
+  return effectiveEngine() === "faster-whisper" ? healthState.fwMap : healthState.cppMap;
+}
+
 function updateModelInfo() {
   const info = MODEL_INFO[ui.model.value];
   if (!ui.modelInfo) return;
-  if (!info) {
-    ui.modelInfo.textContent = "";
-    return;
+  if (!info) { ui.modelInfo.textContent = ""; return; }
+  const hw = effectiveEngine() === "faster-whisper" ? "CPU (no GPU)" : "GPU required";
+  ui.modelInfo.textContent = `download size: ${info.size} · ${info.note} · ${hw}`;
+}
+
+// Re-filter the Model dropdown to the selected engine, and show an engine hint.
+function applyEngine() {
+  const eng = effectiveEngine();
+  const map = activeInstalledMap();
+  [...ui.model.options].forEach(o => {
+    const ok = !!map[o.value];
+    o.disabled = !ok;
+    o.textContent = o.textContent.replace(/ \(not installed\)$/, "");
+    if (!ok) o.textContent += " (not installed)";
+  });
+  // If the current pick isn't available on this engine, jump to the first that is.
+  if (ui.model.selectedOptions[0]?.disabled) {
+    const firstOk = [...ui.model.options].find(o => !o.disabled);
+    if (firstOk) ui.model.value = firstOk.value;
   }
-  ui.modelInfo.textContent = `download size: ${info.size} · ${info.note} · GPU required`;
+  if (ui.engineInfo) {
+    if (eng === "faster-whisper") {
+      ui.engineInfo.textContent = "⚠️ CPU-only on this server — roughly 13× slower than Metal. A short clip can take ~15 s; long files may take several minutes. Be patient.";
+      ui.engineInfo.style.color = "var(--warn, #b45309)";
+    } else {
+      ui.engineInfo.textContent = "Metal GPU — fastest on Apple Silicon.";
+      ui.engineInfo.style.color = "";
+    }
+  }
+  updateModelInfo();
 }
 
 let blobToSend = null, inputName = "audio";
@@ -799,29 +846,35 @@ ui.copyBtn.addEventListener("click", () => {
 });
 applyTheme(themeMode);
 themeQuery.addEventListener?.("change", () => { if (themeMode === "system") applyTheme("system"); });
+ui.engine.addEventListener("change", applyEngine);
 ui.model.addEventListener("change", updateModelInfo);
 ui.useGpu.addEventListener("change", updateModelInfo);
-updateModelInfo();
+applyEngine();
 
 // ---------- Health (topbar chip + sidebar + KPI strip) ----------
 async function checkHealth() {
   try {
     const r = await fetch("/health"); const p = await r.json();
     // Merge installed flags from all engines — a model is available if ANY engine has it
-    const fwMap  = p.engines?.["faster-whisper"]?.installed || {};
-    const cppMap = p.engines?.["whisper-cpp"]?.installed    || {};
-    const allKeys = [...new Set([...Object.keys(fwMap), ...Object.keys(cppMap)])];
-    const installedMap = p.installed
-      || Object.fromEntries(allKeys.map(k => [k, !!(fwMap[k] || cppMap[k])]));
-    const installed = Object.entries(installedMap).filter(([, v]) => v).map(([k]) => k);
+    const fwEng  = p.engines?.["faster-whisper"] || {};
+    const cppEng = p.engines?.["whisper-cpp"]    || {};
+    healthState.fwMap  = fwEng.installed  || {};
+    healthState.cppMap = cppEng.installed || {};
+    healthState.fwAvail  = !!fwEng.available;
+    healthState.cppAvail = !!cppEng.available;
+    healthState.defaultEngine = p.defaultEngine || "whisper-cpp";
+    // Count of models installed on ANY engine — for the KPI sub line.
+    const allKeys = [...new Set([...Object.keys(healthState.fwMap), ...Object.keys(healthState.cppMap)])];
+    const installed = allKeys.filter(k => healthState.fwMap[k] || healthState.cppMap[k]);
     ui.health.textContent = p.ok ? "API ready" : "models missing";
     ui.health.className = "tag " + (p.ok ? "ok" : "bad");
-    [...ui.model.options].forEach(o => {
-      const ok = installedMap[o.value]; o.disabled = !ok;
-      if (!ok && !/not installed/.test(o.textContent)) o.textContent += " (not installed)";
+    // Disable an engine option entirely when that engine has no models installed.
+    [...ui.engine.options].forEach(o => {
+      if (o.value === "faster-whisper") o.disabled = !healthState.fwAvail;
+      if (o.value === "whisper-cpp")    o.disabled = !healthState.cppAvail;
     });
-    const firstOk = [...ui.model.options].find(o => !o.disabled);
-    if (firstOk) { ui.model.value = firstOk.value; updateModelInfo(); }
+    if (ui.engine.selectedOptions[0]?.disabled) ui.engine.value = "";
+    applyEngine();  // re-filter Model list for the (now resolved) engine
     // KPI strip + sidebar summary
     const cpp = p.engines?.["whisper-cpp"] || {};
     ui.kpiServer.textContent = p.ok ? "Online" : "Degraded";
@@ -994,8 +1047,10 @@ async function transcribe() {
     const fd = new FormData();
     fd.append("audio", blobToSend, blobToSend.name || "audio");
     fd.append("model", ui.model.value);
+    if (ui.engine.value) fd.append("engine", ui.engine.value);
     fd.append("language", ui.lang.value.trim() || "auto");
-    fd.append("useGpu", ui.useGpu.checked ? "1" : "0");
+    // faster-whisper runs on CPU here; whisper-cpp requires GPU=1. Force GPU off for faster-whisper.
+    fd.append("useGpu", (ui.engine.value === "faster-whisper") ? "0" : (ui.useGpu.checked ? "1" : "0"));
     fd.append("diarize", ui.diarize.checked ? "1" : "0");
     if (ui.prompt.value.trim()) fd.append("prompt", ui.prompt.value.trim());
 

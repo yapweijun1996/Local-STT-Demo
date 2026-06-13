@@ -65,8 +65,26 @@ CHUNK_OVERLAP_SECONDS = max(0, int(os.environ.get("CHUNK_OVERLAP_SECONDS", "5"))
 ENABLE_DIARIZATION = os.environ.get("ENABLE_DIARIZATION", "1") != "0"
 
 MODEL_REGISTRY = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
+KNOWN_ENGINES = {"whisper-cpp", "faster-whisper"}
 _FW_REPO = {k: "Systran" for k in MODEL_REGISTRY}
 _FW_REPO["large-v3-turbo"] = "mobiuslabsgmbh"
+
+
+def _fw_model_installed(model_name: str) -> bool:
+    """True if a faster-whisper CTranslate2 model.bin is cached in HF_HOME.
+
+    faster-whisper auto-downloads on first use, but this deployment runs with
+    HF_HUB_OFFLINE=1, so a missing model fails cryptically at job time. Check
+    up-front instead and return a clear error.
+    """
+    hf_root = os.environ.get("HF_HOME")
+    if not hf_root or model_name not in _FW_REPO:
+        return False
+    org = _FW_REPO[model_name]
+    snapshots = Path(hf_root) / f"models--{org}--faster-whisper-{model_name}" / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    return any((snap / "model.bin").is_file() for snap in snapshots.iterdir())
 
 # ── Redis keys ─────────────────────────────────────────────────────────
 JOB_PREFIX = "stt:job:"
@@ -407,20 +425,7 @@ async def _shutdown() -> None:
 # ── Health ─────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    hf_root = os.environ.get("HF_HOME")
-    fw_installed: dict[str, bool] = {}
-    for key in MODEL_REGISTRY:
-        if hf_root:
-            org = _FW_REPO[key]
-            d = Path(hf_root) / f"models--{org}--faster-whisper-{key}"
-            snapshots = d / "snapshots"
-            fw_installed[key] = (
-                any((snap / "model.bin").is_file() for snap in snapshots.iterdir())
-                if snapshots.is_dir()
-                else False
-            )
-        else:
-            fw_installed[key] = False
+    fw_installed: dict[str, bool] = {key: _fw_model_installed(key) for key in MODEL_REGISTRY}
 
     cpp_ok = cpp_available()
     cpp_installed = cpp_models() if cpp_ok else {}
@@ -524,6 +529,22 @@ async def api_transcribe(
         )
 
     engine_name = engine.strip() or DEFAULT_ENGINE
+    if engine_name not in KNOWN_ENGINES:
+        _safe_unlink(source_path)
+        return JSONResponse(
+            {"error": f"Unknown engine '{engine_name}'. Use: {', '.join(sorted(KNOWN_ENGINES))}"},
+            status_code=400,
+        )
+    if engine_name == "faster-whisper" and not _fw_model_installed(model_name):
+        _safe_unlink(source_path)
+        return JSONResponse(
+            {
+                "error": f"Model '{model_name}' is not downloaded for the faster-whisper engine. "
+                f"This server runs offline (HF_HUB_OFFLINE=1) so it cannot fetch it on demand. "
+                f"Pre-download it, or use engine=whisper-cpp.",
+            },
+            status_code=400,
+        )
     if engine_name == "whisper-cpp":
         if useGpu != "1":
             _safe_unlink(source_path)
