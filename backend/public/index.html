@@ -851,6 +851,11 @@ function setTranscriptState(state) {
   c.classList.toggle("is-loading", state === "loading");
   c.classList.toggle("is-ready", state === "ready");
 }
+// Skeleton caption follows the real phase: uploading → queued → transcribing.
+function setSkeletonPhase(key) {
+  const el = document.getElementById("skLabel");
+  if (el) el.textContent = t(key);
+}
 function fmtBytes(bytes) {
   const u = ["B", "KB", "MB", "GB"]; let b = Number(bytes);
   if (!Number.isFinite(b) || b <= 0) return "--";
@@ -960,8 +965,8 @@ themeQuery.addEventListener?.("change", () => { if (themeMode === "system") appl
 
 // ---------- i18n (中/英) — new UI strings; extend as the page is localized ----------
 const I18N = {
-  en: { toAdvanced: "Switch to Advanced mode", toSimple: "Switch to Simple mode", record: "Record", upload: "Upload", installApp: "Install app", transcribing: "Transcribing" },
-  zh: { toAdvanced: "切换到高级模式", toSimple: "切换到普通模式", record: "录音", upload: "上传", installApp: "安装软件", transcribing: "正在转录" },
+  en: { toAdvanced: "Switch to Advanced mode", toSimple: "Switch to Simple mode", record: "Record", upload: "Upload", installApp: "Install app", uploading: "Uploading", queued: "Queued", transcribing: "Transcribing" },
+  zh: { toAdvanced: "切换到高级模式", toSimple: "切换到普通模式", record: "录音", upload: "上传", installApp: "安装软件", uploading: "上传中", queued: "排队中", transcribing: "正在转录" },
 };
 const LANG = (() => {
   try { const s = localStorage.getItem("stt-lang"); if (s === "en" || s === "zh") return s; } catch {}
@@ -1206,6 +1211,7 @@ async function transcribe() {
   ui.dlTxt.classList.add("hidden"); ui.dlSrt.classList.add("hidden"); ui.copyBtn.classList.add("hidden");
   setProgress(0, "Uploading audio…");
   setTranscriptState("loading");
+  setSkeletonPhase("uploading");
   try {
     const fd = new FormData();
     fd.append("audio", blobToSend, blobToSend.name || "audio");
@@ -1232,6 +1238,7 @@ async function transcribe() {
     const p = await postTranscribe(fd, (loaded, total) => {
       if (loaded < 0) {                          // upload finished → server queued/working
         setDownloadStats([]); setBusy(true);
+        setSkeletonPhase("queued");
         setStatus("Queued — waiting for worker…");
         return;
       }
@@ -1313,11 +1320,13 @@ async function _pollJob(jobId, maxMs = 12 * 60 * 60 * 1000) {
     }
     if (r.ok && data.status === "queued") {
       const pos = data.queuePosition ? `position #${data.queuePosition}` : "waiting";
+      setSkeletonPhase("queued");
       setProgress(5, `Queued · ${pos}`);
       setDownloadStats([`${data.queuedCount ?? 0} queued`, `${data.runningCount ?? 0} running`]);
       continue;
     }
     if (r.ok && data.status === "running") {
+      setSkeletonPhase("transcribing");
       const startedAt = Number(data.startedAt);
       const elapsed = Number.isFinite(startedAt) ? (Date.now() / 1000) - startedAt : clientElapsed;
       const total = Number(data.totalChunks) || 0;
@@ -1441,6 +1450,7 @@ async function resumeActiveJob() {
   setBusy(true);
   setProgress(5, "Restoring active job…");
   setTranscriptState("loading");
+  setSkeletonPhase("transcribing");
   try {
     const result = await _pollJob(jobId);
     renderResult(result);
