@@ -2,6 +2,36 @@
 
 Newest first. Scope: `backend/public/` live UI (stt.yapweijun1996.com) unless noted.
 
+## 2026-06-13 — Diarization accuracy: default-on + speaker-count hint + word-level splitting
+
+Three rounds addressing "speaker detection is inaccurate / I don't see speakers".
+
+- **Default ON** (`backend/public/index.html`): the "Detect speakers (diarization)" toggle now
+  ships `checked`. Users kept missing labels because it was off and the toggle is read only at
+  submit time. (`sw.js` VERSION bumped.)
+- **Speaker-count hint** (`server.py` + `index.html`): `/api/transcribe` gains a `speakers`
+  field (1–8; ''/auto → estimate), parsed by `_parse_speakers()` and passed to pyannote's
+  `num_speakers`. UI adds a "How many speakers?" dropdown under the toggle (Auto default,
+  disabled when diarization is off). **Passing the known count is the single biggest accuracy
+  lever** — auto-estimation often mis-counts (splits one person into several or merges two).
+- **Boundary splitting** (`diarize.py`): `assign_speakers()` now returns `(segments, count)` and
+  SPLITS a transcript segment that genuinely spans a speaker change (dominant speaker < 85% of
+  overlapped time, each piece ≥ 800 ms) instead of mislabeling the whole thing as one person.
+  Single-speaker / tiny-spillover segments stay whole.
+- **Word-level splitting** (`transcribe.py`, `whisper_cpp.py`, `server.py`, `diarize.py`): when a
+  split segment has word timestamps, it breaks at WORD granularity (precise) rather than
+  time-proportional text. faster-whisper: `word_timestamps=True` on both paths. whisper.cpp:
+  parse the existing `-ojf` sub-word tokens into words (merge BPE pieces on leading space, skip
+  special tokens). `words` are threaded through chunk-merge with correct offsets, then stripped
+  from the final segments + per-chunk `partialSegments` so they never bloat the API/Redis payload.
+  `_split_by_words()` labels each word by overlapping turn, groups consecutive same-speaker words,
+  and folds sub-800 ms groups to kill one-word flicker.
+- **Verified**: both engines emit real word timestamps on jfk.wav (whisper-cpp 5/seg,
+  faster-whisper 22/seg); unit-tested splits (clean word-boundary break; single-speaker and
+  tiny-spillover stay whole; stray short word folds back); E2E both engines + diarize run clean,
+  leak no `words`. NOTE: jfk.wav is single-speaker so the split path only shows on multi-speaker
+  audio — test an interview with the speaker count set for the real effect.
+
 ## 2026-06-13 — User-selectable STT engine (whisper-cpp vs faster-whisper)
 
 - **UI (`backend/public/index.html`)**: new **Engine** selector in Settings — Auto (server

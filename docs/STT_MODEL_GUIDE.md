@@ -82,6 +82,22 @@ faster-whisper models that are actually installed; the API validates the same.
 - Best quality overall, latency/memory OK → `large-v3` on the **backend** (not the browser).
 - Non-English → set the language explicitly; small models guess poorly on auto-detect.
 
+## Speaker diarization ("who spoke when")
+
+Tick **Detect speakers** (on by default) to label each segment `Speaker 1 / 2 / …`. Runs
+pyannote `speaker-diarization-3.1` on the whole file (token-free, offline). Two accuracy levers:
+
+- **Set the speaker count** when you know it (the "How many speakers?" dropdown / `speakers`
+  form field, 1–8). This is the **biggest** accuracy boost — auto-estimation frequently
+  mis-counts (splits one person into several, or merges two). A 2-person interview → pick **2**.
+- **Boundaries** are aligned to the transcript. A segment that genuinely spans a speaker change
+  is split at **word granularity** (using word timestamps from either engine) so the label
+  flips between the right words, not mid-phrase. faster-whisper gives slightly finer word
+  timing; whisper-cpp (Metal) is much faster and good enough for most audio.
+
+Diarization adds a full second pass over the audio, so it's slower than plain transcription —
+especially on the faster-whisper CPU engine. Untick it when you don't need speaker labels.
+
 ## Notes
 
 - Model binaries are kept out of git (`backend/.gitignore`); the backend downloads them on
