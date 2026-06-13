@@ -327,7 +327,7 @@
     opacity: 0; visibility: hidden; transform: translateY(-2px); transition: opacity .06s, transform .06s;
   }
   .tip:hover::after, .tip:focus-visible::after { opacity: 1; visibility: visible; transform: translateY(0); }
-  #modeToggle svg { width: 19px; height: 19px; display: block; }
+  #modeToggle svg, #installBtn svg { width: 19px; height: 19px; display: block; }
 </style>
 </head>
 <body>
@@ -363,7 +363,9 @@
       <h1 id="viewTitle">Transcribe</h1>
       <span class="tag" id="health">checking API…</span>
       <span class="spacer"></span>
-      <button id="installBtn" class="btn btn-ghost btn-sm" type="button" hidden>⤓ Install app</button>
+      <button id="installBtn" class="iconbtn tip" type="button" hidden aria-label="Install app" data-tip="Install app">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      </button>
       <button class="iconbtn tip" id="modeToggle" type="button" aria-pressed="false" aria-label="Switch mode" data-tip="Switch mode">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <line x1="4" y1="8" x2="20" y2="8"/><circle cx="10" cy="8" r="2.6" fill="var(--surface)"/>
@@ -914,8 +916,8 @@ themeQuery.addEventListener?.("change", () => { if (themeMode === "system") appl
 
 // ---------- i18n (中/英) — new UI strings; extend as the page is localized ----------
 const I18N = {
-  en: { toAdvanced: "Switch to Advanced mode", toSimple: "Switch to Simple mode", record: "Record", upload: "Upload" },
-  zh: { toAdvanced: "切换到高级模式", toSimple: "切换到普通模式", record: "录音", upload: "上传" },
+  en: { toAdvanced: "Switch to Advanced mode", toSimple: "Switch to Simple mode", record: "Record", upload: "Upload", installApp: "Install app" },
+  zh: { toAdvanced: "切换到高级模式", toSimple: "切换到普通模式", record: "录音", upload: "上传", installApp: "安装软件" },
 };
 const LANG = (() => {
   try { const s = localStorage.getItem("stt-lang"); if (s === "en" || s === "zh") return s; } catch {}
@@ -942,6 +944,8 @@ ui.modeToggle.addEventListener("click", () => applyMode(uiMode === "advanced" ? 
 // ---------- Record / Upload segmented toggle (simple mode) ----------
 ui.ioRecordLbl.textContent = t("record");
 ui.ioUploadLbl.textContent = t("upload");
+ui.installBtn.setAttribute("data-tip", t("installApp"));
+ui.installBtn.setAttribute("aria-label", t("installApp"));
 function applyIO(which) {
   const upload = which === "upload";
   document.body.classList.toggle("io-upload", upload);
