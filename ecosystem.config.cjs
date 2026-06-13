@@ -2,7 +2,9 @@ module.exports = {
   apps: [
     {
       name: "local-stt",
-      script: ".venv/bin/python",
+      // Python 3.12 venv (uv-managed) — required by pyannote.audio 4.0 / community-1.
+      // Old 3.9 .venv kept as rollback.
+      script: ".venv312/bin/python",
       args: "-m src.server",
       cwd: "/Users/yapweijun/Documents/GitHub/Local-STT-Demo/backend",
       interpreter: "none",
@@ -20,9 +22,10 @@ module.exports = {
         ENABLE_CHUNK_TRANSCRIPTION: "1",
         CHUNK_SECONDS: "180",
         CHUNK_OVERLAP_SECONDS: "5",
-        // Speaker diarization (pyannote). Models pre-warmed into HF_HOME above;
-        // HF_HUB_OFFLINE=1 runs them from cache with no token / no network.
+        // Speaker diarization (pyannote.audio 4.0). Models pre-warmed into HF_HOME
+        // above; HF_HUB_OFFLINE=1 runs them from cache with no token / no network.
         ENABLE_DIARIZATION: "1",
+        DIARIZATION_MODEL: "pyannote/speaker-diarization-community-1",
         HF_HUB_OFFLINE: "1",
         REDIS_URL: "redis://127.0.0.1:6379/0",
         // whisper.cpp engine (Metal GPU) — auto-detected if binary exists

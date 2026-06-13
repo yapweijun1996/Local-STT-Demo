@@ -7,4 +7,6 @@ redis>=5.0.0,<6.0.0
 # Speaker diarization ("who spoke when"). Heavy: pulls torch (~several hundred MB).
 # Also needs an HF token + accepting model terms on huggingface.co — see diarize.py.
 # Comment out this line if you don't need speaker labels.
-pyannote.audio>=3.1,<4.0
+# 4.0 requires Python >=3.10 and ships the community-1 model (better speaker
+# counting/assignment than 3.1). The backend runs under a Python 3.12 venv (.venv312).
+pyannote.audio>=4.0,<5.0

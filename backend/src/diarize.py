@@ -33,7 +33,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-DIARIZATION_MODEL = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1")
+DIARIZATION_MODEL = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-community-1")
 
 
 def _hf_token() -> str | None:
@@ -109,87 +109,6 @@ def status() -> dict[str, Any]:
     }
 
 
-def _patch_hf_token_kwarg() -> None:
-    """pyannote 3.x calls hf_hub_download(use_auth_token=...), a kwarg removed in
-    huggingface_hub >= 1.0. Rewrite it to token= so we don't have to downgrade the
-    hub (faster-whisper / speechbrain / tokenizers share it). Idempotent."""
-    import sys
-
-    import huggingface_hub
-
-    orig = huggingface_hub.hf_hub_download
-    if getattr(orig, "_token_kwarg_patched", False):
-        return
-
-    def patched(*args, **kwargs):
-        if "use_auth_token" in kwargs:
-            tok = kwargs.pop("use_auth_token")
-            if tok is not None and "token" not in kwargs:
-                kwargs["token"] = tok
-        if _offline():
-            # Serve from the local cache only: no network, no token required.
-            kwargs.setdefault("local_files_only", True)
-        return orig(*args, **kwargs)
-
-    patched._token_kwarg_patched = True
-    huggingface_hub.hf_hub_download = patched
-    # Rebind modules that already did `from huggingface_hub import hf_hub_download`.
-    for mod in list(sys.modules.values()):
-        try:
-            if getattr(mod, "hf_hub_download", None) is orig:
-                mod.hf_hub_download = patched
-        except Exception:
-            pass
-
-
-def _soften_speechbrain_lazy_imports() -> None:
-    """speechbrain 1.1's LazyModule eagerly resolves EVERY optional integration
-    submodule (k2_fsa, huggingface.wordemb, …) when pyannote enumerates the
-    speaker-verification module, and the ones whose heavy deps (k2, fairseq, …) are
-    absent raise ImportError. Diarization uses none of them. speechbrain already
-    swallows this for `inspect.py` (importutils.py:89) but not for pyannote's path —
-    so make any failed lazy import degrade to an empty stub instead of raising."""
-    import types
-
-    from speechbrain.utils import importutils as _iu
-
-    LazyModule = _iu.LazyModule
-    if getattr(LazyModule, "_lazy_softfail_patched", False):
-        return
-
-    orig_ensure = LazyModule.ensure_module
-
-    def safe_ensure(self, stacklevel=1):
-        try:
-            return orig_ensure(self, stacklevel)
-        except Exception:
-            if self.lazy_module is None:
-                self.lazy_module = types.ModuleType(getattr(self, "target", "sb_stub"))
-            return self.lazy_module
-
-    LazyModule.ensure_module = safe_ensure
-    LazyModule._lazy_softfail_patched = True
-
-
-def _patch_torch_load() -> None:
-    """torch >= 2.6 flipped torch.load(weights_only) default to True, which rejects
-    the custom globals (TorchVersion, omegaconf, …) baked into pyannote/speechbrain
-    checkpoints. These are the official, license-gated pyannote weights — trusted —
-    so force weights_only=False for them. Idempotent; only touched on the diarize path."""
-    import torch
-
-    orig = torch.load
-    if getattr(orig, "_weights_only_patched", False):
-        return
-
-    def patched(*args, **kwargs):
-        kwargs["weights_only"] = False
-        return orig(*args, **kwargs)
-
-    patched._weights_only_patched = True
-    torch.load = patched
-
-
 def _device():
     import torch
 
@@ -225,12 +144,12 @@ def _get_pipeline():
 
             from pyannote.audio import Pipeline
 
-            _patch_hf_token_kwarg()
-            _patch_torch_load()
-            _soften_speechbrain_lazy_imports()
+            # pyannote.audio 4.0: `token=` (the legacy `use_auth_token` kwarg is
+            # gone) and the model loads cleanly without the 3.x torch.load /
+            # speechbrain / hf_hub_download monkeypatches we used to need.
             pipe = Pipeline.from_pretrained(
                 DIARIZATION_MODEL,
-                use_auth_token=_hf_token(),
+                token=_hf_token(),
             )
             if pipe is None:
                 # from_pretrained returns None when the token can't access the
@@ -278,10 +197,15 @@ def diarize_file(
             kwargs["max_speakers"] = int(max_speakers)
 
     try:
-        diarization = pipe(wav_path, **kwargs)
+        result = pipe(wav_path, **kwargs)
     except Exception as exc:
         log.error("diarization: inference failed on %s (%s)", wav_path, exc)
         return []
+
+    # pyannote.audio 4.0 returns a DiarizeOutput; older versions return the
+    # Annotation directly. `.speaker_diarization` is the regular (non-exclusive)
+    # annotation we tag against.
+    diarization = getattr(result, "speaker_diarization", result)
 
     # Map pyannote labels (SPEAKER_00 …) to friendly numbers by first appearance.
     label_to_name: dict[str, str] = {}
