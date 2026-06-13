@@ -338,14 +338,25 @@
   #transcriptCard.is-loading, #transcriptCard.is-ready { display: block; }
   #transcriptCard.is-loading #out, #transcriptCard.is-loading .seg-wrap { display: none; }
   #transcriptCard:not(.is-loading) #transcriptSkeleton { display: none; }
-  .skeleton { display: flex; flex-direction: column; gap: 13px; padding: 6px 0; }
+  .skeleton { display: flex; flex-direction: column; gap: 14px; padding: 6px 0; }
+  .sk-caption { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 13px; font-weight: 600; }
+  .sk-dots { display: inline-flex; gap: 3px; }
+  .sk-dots i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .25; animation: sk-blink 1.2s infinite; }
+  .sk-dots i:nth-child(2) { animation-delay: .2s; } .sk-dots i:nth-child(3) { animation-delay: .4s; }
+  @keyframes sk-blink { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+  .sk-lines { display: flex; flex-direction: column; gap: 13px; }
   .sk-line { height: 14px; border-radius: 7px; background: var(--surface-2); position: relative; overflow: hidden; }
   .sk-line::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%);
     background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--text) 9%, transparent), transparent);
     animation: sk-shimmer 1.3s ease-in-out infinite; }
+  /* Cascade the shimmer down the lines so it reads like words being written. */
+  .sk-lines .sk-line:nth-child(1)::after { animation-delay: 0s; }
+  .sk-lines .sk-line:nth-child(2)::after { animation-delay: .16s; }
+  .sk-lines .sk-line:nth-child(3)::after { animation-delay: .32s; }
+  .sk-lines .sk-line:nth-child(4)::after { animation-delay: .48s; }
   .sk-line.w90 { width: 90%; } .sk-line.w70 { width: 70%; } .sk-line.w50 { width: 50%; }
   @keyframes sk-shimmer { 100% { transform: translateX(100%); } }
-  @media (prefers-reduced-motion: reduce) { .sk-line::after { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .sk-line::after, .sk-dots i { animation: none; } }
 </style>
 </head>
 <body>
@@ -545,7 +556,10 @@
           </div>
           <div class="card-body">
             <div id="transcriptSkeleton" class="skeleton" aria-hidden="true">
-              <div class="sk-line w90"></div><div class="sk-line"></div><div class="sk-line w70"></div><div class="sk-line w50"></div>
+              <div class="sk-caption"><span id="skLabel">Transcribing</span><span class="sk-dots"><i></i><i></i><i></i></span></div>
+              <div class="sk-lines">
+                <div class="sk-line w90"></div><div class="sk-line"></div><div class="sk-line w70"></div><div class="sk-line w50"></div>
+              </div>
             </div>
             <div id="out" class="muted">— output will appear here —</div>
             <details class="mt-12 seg-wrap">
@@ -946,8 +960,8 @@ themeQuery.addEventListener?.("change", () => { if (themeMode === "system") appl
 
 // ---------- i18n (中/英) — new UI strings; extend as the page is localized ----------
 const I18N = {
-  en: { toAdvanced: "Switch to Advanced mode", toSimple: "Switch to Simple mode", record: "Record", upload: "Upload", installApp: "Install app" },
-  zh: { toAdvanced: "切换到高级模式", toSimple: "切换到普通模式", record: "录音", upload: "上传", installApp: "安装软件" },
+  en: { toAdvanced: "Switch to Advanced mode", toSimple: "Switch to Simple mode", record: "Record", upload: "Upload", installApp: "Install app", transcribing: "Transcribing" },
+  zh: { toAdvanced: "切换到高级模式", toSimple: "切换到普通模式", record: "录音", upload: "上传", installApp: "安装软件", transcribing: "正在转录" },
 };
 const LANG = (() => {
   try { const s = localStorage.getItem("stt-lang"); if (s === "en" || s === "zh") return s; } catch {}
@@ -976,6 +990,7 @@ ui.ioRecordLbl.textContent = t("record");
 ui.ioUploadLbl.textContent = t("upload");
 ui.installBtn.setAttribute("data-tip", t("installApp"));
 ui.installBtn.setAttribute("aria-label", t("installApp"));
+{ const sk = document.getElementById("skLabel"); if (sk) sk.textContent = t("transcribing"); }
 function applyIO(which) {
   const upload = which === "upload";
   document.body.classList.toggle("io-upload", upload);
