@@ -4,7 +4,7 @@
    - Same-origin GET assets: stale-while-revalidate.
    - NEVER touches: non-GET (transcribe POST), cross-origin (CDN / HF model
      downloads), or API endpoints (/api, /health) — those must hit the network. */
-const VERSION = "2026-06-13-3";
+const VERSION = "2026-06-13-4";
 const CACHE = `local-stt-${VERSION}`;
 const SHELL = [
   "./",

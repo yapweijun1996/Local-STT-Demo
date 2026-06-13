@@ -292,6 +292,42 @@
     select, input[type=text], textarea { font-size: 16px; }  /* prevent iOS focus zoom */
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+  /* ───────── Simple / Advanced mode (progressive disclosure) ───────── */
+  /* Advanced = current full layout. Simple hides the technical surface and
+     unifies record/upload behind a segmented toggle. Toggled via a body class. */
+  .mode-simple .kpis,
+  .mode-simple #settingsCard,
+  .mode-simple .nav-developer { display: none; }
+
+  /* Record / Upload segmented toggle — shown only in simple mode */
+  #ioToggle { display: none; }
+  .mode-simple #ioToggle {
+    display: inline-flex; gap: 3px; margin: 0 0 12px auto; width: max-content;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--r-md); padding: 3px;
+  }
+  #ioToggle button {
+    appearance: none; border: 0; background: transparent; color: var(--muted);
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; min-height: 34px;
+    padding: 6px 16px; border-radius: 9px; display: inline-flex; align-items: center; gap: 7px;
+  }
+  #ioToggle button.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.18); }
+  #ioToggle svg { width: 15px; height: 15px; }
+  .mode-simple #ioGrid { grid-template-columns: 1fr; }
+  .mode-simple.io-record #uploadCard,
+  .mode-simple.io-upload #recordCard { display: none; }
+
+  /* Immediate hover tooltip (no native-title delay) */
+  .tip { position: relative; }
+  .tip::after {
+    content: attr(data-tip); position: absolute; top: calc(100% + 6px); right: 0; z-index: 60;
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 9px; font-size: 12px; font-weight: 600; white-space: nowrap;
+    box-shadow: 0 6px 18px rgba(0,0,0,.28);
+    opacity: 0; visibility: hidden; transform: translateY(-2px); transition: opacity .06s, transform .06s;
+  }
+  .tip:hover::after, .tip:focus-visible::after { opacity: 1; visibility: visible; transform: translateY(0); }
+  #modeToggle svg { width: 19px; height: 19px; display: block; }
 </style>
 </head>
 <body>
@@ -307,9 +343,11 @@
       <p class="nav-label">Workspace</p>
       <a href="#" class="nav-item active" data-view="transcribe" aria-current="page"><span class="ico">🎛️</span> Transcribe</a>
       <a href="#" class="nav-item" data-view="history"><span class="ico">🗂️</span> History <span class="nav-badge hidden" id="historyCount"></span></a>
-      <p class="nav-label">Developer</p>
-      <a href="#" class="nav-item" data-view="api"><span class="ico">🔌</span> API Reference</a>
-      <a href="/docs" target="_blank" rel="noopener" class="nav-item"><span class="ico">📑</span> Swagger UI ↗</a>
+      <div class="nav-developer">
+        <p class="nav-label">Developer</p>
+        <a href="#" class="nav-item" data-view="api"><span class="ico">🔌</span> API Reference</a>
+        <a href="/docs" target="_blank" rel="noopener" class="nav-item"><span class="ico">📑</span> Swagger UI ↗</a>
+      </div>
     </nav>
     <div class="side-foot">
       <div class="side-health"><span class="dot" id="sideDot"></span><span id="sideHealth">checking…</span></div>
@@ -326,6 +364,12 @@
       <span class="tag" id="health">checking API…</span>
       <span class="spacer"></span>
       <button id="installBtn" class="btn btn-ghost btn-sm" type="button" hidden>⤓ Install app</button>
+      <button class="iconbtn tip" id="modeToggle" type="button" aria-pressed="false" aria-label="Switch mode" data-tip="Switch mode">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="4" y1="8" x2="20" y2="8"/><circle cx="10" cy="8" r="2.6" fill="var(--surface)"/>
+          <line x1="4" y1="16" x2="20" y2="16"/><circle cx="15" cy="16" r="2.6" fill="var(--surface)"/>
+        </svg>
+      </button>
       <button class="iconbtn" id="themeToggle" type="button" aria-label="Toggle theme">☀️</button>
     </header>
 
@@ -341,8 +385,8 @@
           <div class="kpi"><div class="kpi-label">Max upload</div><div class="kpi-value">200 MB</div><div class="kpi-sub">auto-compress &gt; 5 MB</div></div>
         </div>
 
-        <!-- Settings -->
-        <div class="card">
+        <!-- Settings (advanced mode only) -->
+        <div class="card" id="settingsCard">
           <div class="card-head"><h2 class="card-title">⚙️ Settings</h2></div>
           <div class="card-body">
             <div class="form-grid">
@@ -418,8 +462,18 @@
         </div>
 
         <!-- Inputs -->
-        <div class="grid-2" style="margin-bottom:16px">
-          <div class="card">
+        <div id="ioToggle" role="tablist" aria-label="Input method">
+          <button id="ioRecordBtn" type="button" role="tab" class="active" aria-selected="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
+            <span id="ioRecordLbl">Record</span>
+          </button>
+          <button id="ioUploadBtn" type="button" role="tab" aria-selected="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <span id="ioUploadLbl">Upload</span>
+          </button>
+        </div>
+        <div class="grid-2" id="ioGrid" style="margin-bottom:16px">
+          <div class="card" id="uploadCard">
             <div class="card-head"><h2 class="card-title">📁 Upload a file</h2></div>
             <div class="card-body">
               <div id="drop">
@@ -434,7 +488,7 @@
             </div>
           </div>
 
-          <div class="card">
+          <div class="card" id="recordCard">
             <div class="card-head"><h2 class="card-title">🎙️ Record from mic</h2><span class="pill" id="micState">idle</span></div>
             <div class="card-body">
               <canvas class="wave" id="waveMic" width="900" height="64"></canvas>
@@ -636,6 +690,8 @@ const ui = {
   modelInfo: $("modelInfo"),
   out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"), copyBtn: $("copyBtn"),
   health: $("health"), themeToggle: $("themeToggle"), installBtn: $("installBtn"),
+  modeToggle: $("modeToggle"), ioRecordBtn: $("ioRecordBtn"), ioUploadBtn: $("ioUploadBtn"),
+  ioRecordLbl: $("ioRecordLbl"), ioUploadLbl: $("ioUploadLbl"),
   historyPanel: $("historyPanel"), historyList: $("historyList"), clearHistoryBtn: $("clearHistoryBtn"),
   historyEmpty: $("historyEmpty"), historyCount: $("historyCount"),
   menuBtn: $("menuBtn"), scrim: $("scrim"), viewTitle: $("viewTitle"),
@@ -855,6 +911,51 @@ ui.copyBtn.addEventListener("click", () => {
 });
 applyTheme(themeMode);
 themeQuery.addEventListener?.("change", () => { if (themeMode === "system") applyTheme("system"); });
+
+// ---------- i18n (中/英) — new UI strings; extend as the page is localized ----------
+const I18N = {
+  en: { toAdvanced: "Switch to Advanced mode", toSimple: "Switch to Simple mode", record: "Record", upload: "Upload" },
+  zh: { toAdvanced: "切换到高级模式", toSimple: "切换到普通模式", record: "录音", upload: "上传" },
+};
+const LANG = (() => {
+  try { const s = localStorage.getItem("stt-lang"); if (s === "en" || s === "zh") return s; } catch {}
+  return (navigator.language || "en").toLowerCase().startsWith("zh") ? "zh" : "en";
+})();
+const t = (k) => (I18N[LANG] && I18N[LANG][k]) || I18N.en[k] || k;
+
+// ---------- Simple / Advanced mode (progressive disclosure, persisted) ----------
+const MODE_KEY = "stt-mode";
+let uiMode = (() => { try { return localStorage.getItem(MODE_KEY) === "advanced" ? "advanced" : "simple"; } catch { return "simple"; } })();
+function applyMode(m) {
+  uiMode = m === "advanced" ? "advanced" : "simple";
+  const adv = uiMode === "advanced";
+  document.body.classList.toggle("mode-advanced", adv);
+  document.body.classList.toggle("mode-simple", !adv);
+  const tip = adv ? t("toSimple") : t("toAdvanced");
+  ui.modeToggle.setAttribute("data-tip", tip);
+  ui.modeToggle.setAttribute("aria-label", tip);
+  ui.modeToggle.setAttribute("aria-pressed", String(adv));
+  try { localStorage.setItem(MODE_KEY, uiMode); } catch {}
+}
+ui.modeToggle.addEventListener("click", () => applyMode(uiMode === "advanced" ? "simple" : "advanced"));
+
+// ---------- Record / Upload segmented toggle (simple mode) ----------
+ui.ioRecordLbl.textContent = t("record");
+ui.ioUploadLbl.textContent = t("upload");
+function applyIO(which) {
+  const upload = which === "upload";
+  document.body.classList.toggle("io-upload", upload);
+  document.body.classList.toggle("io-record", !upload);
+  ui.ioRecordBtn.classList.toggle("active", !upload);
+  ui.ioUploadBtn.classList.toggle("active", upload);
+  ui.ioRecordBtn.setAttribute("aria-selected", String(!upload));
+  ui.ioUploadBtn.setAttribute("aria-selected", String(upload));
+}
+ui.ioRecordBtn.addEventListener("click", () => applyIO("record"));
+ui.ioUploadBtn.addEventListener("click", () => applyIO("upload"));
+
+applyMode(uiMode);
+applyIO("record");
 const syncSpeakersEnabled = () => { ui.speakers.disabled = !ui.diarize.checked; };
 ui.diarize.addEventListener("change", syncSpeakersEnabled);
 syncSpeakersEnabled();
@@ -1058,14 +1159,23 @@ async function transcribe() {
   try {
     const fd = new FormData();
     fd.append("audio", blobToSend, blobToSend.name || "audio");
-    fd.append("model", ui.model.value);
-    if (ui.engine.value) fd.append("engine", ui.engine.value);
-    fd.append("language", ui.lang.value.trim() || "auto");
-    // faster-whisper runs on CPU here; whisper-cpp requires GPU=1. Force GPU off for faster-whisper.
-    fd.append("useGpu", (ui.engine.value === "faster-whisper") ? "0" : (ui.useGpu.checked ? "1" : "0"));
-    fd.append("diarize", ui.diarize.checked ? "1" : "0");
-    if (ui.diarize.checked && ui.speakers.value) fd.append("speakers", ui.speakers.value);
-    if (ui.prompt.value.trim()) fd.append("prompt", ui.prompt.value.trim());
+    if (uiMode === "simple") {
+      // Simple mode: fast, zero-config — whisper-cpp (Metal) + large-v3, no diarization.
+      // engine omitted → server default (whisper-cpp).
+      fd.append("model", "large-v3");
+      fd.append("language", "auto");
+      fd.append("useGpu", "1");
+      fd.append("diarize", "0");
+    } else {
+      fd.append("model", ui.model.value);
+      if (ui.engine.value) fd.append("engine", ui.engine.value);
+      fd.append("language", ui.lang.value.trim() || "auto");
+      // faster-whisper runs on CPU here; whisper-cpp requires GPU=1. Force GPU off for faster-whisper.
+      fd.append("useGpu", (ui.engine.value === "faster-whisper") ? "0" : (ui.useGpu.checked ? "1" : "0"));
+      fd.append("diarize", ui.diarize.checked ? "1" : "0");
+      if (ui.diarize.checked && ui.speakers.value) fd.append("speakers", ui.speakers.value);
+      if (ui.prompt.value.trim()) fd.append("prompt", ui.prompt.value.trim());
+    }
 
     // Real upload progress + chips, then an indeterminate "server is transcribing" phase.
     let lastT = performance.now(), lastLoaded = 0, speed = 0;
