@@ -328,6 +328,11 @@
   }
   .tip:hover::after, .tip:focus-visible::after { opacity: 1; visibility: visible; transform: translateY(0); }
   #modeToggle svg, #installBtn svg { width: 19px; height: 19px; display: block; }
+  /* Bulletproof: never show the install button when running as an installed PWA,
+     regardless of JS detection/cache state (iOS 13+ and Android match this). */
+  @media (display-mode: standalone), (display-mode: minimal-ui), (display-mode: fullscreen) {
+    #installBtn { display: none !important; }
+  }
 
   /* ───────── Transcript states ───────── */
   /* Empty stat badge is just a weird floating shape — auto-hide it. */
