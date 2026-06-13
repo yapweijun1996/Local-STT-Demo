@@ -848,12 +848,24 @@ def _offset_and_filter_segments(
                 continue
         elif midpoint >= core_end_ms:
             continue
-        out.append({
+        new_seg = {
             "startMs": max(core_start_ms, start_ms),
             "endMs": min(core_end_ms, max(end_ms, start_ms)),
             "text": text,
             "language": seg.get("language"),
-        })
+        }
+        raw_words = seg.get("words")
+        if raw_words:
+            new_seg["words"] = [
+                {
+                    "startMs": int(w["startMs"]) + offset_ms,
+                    "endMs": int(w["endMs"]) + offset_ms,
+                    "word": w["word"],
+                }
+                for w in raw_words
+                if w.get("startMs") is not None and w.get("endMs") is not None
+            ]
+        out.append(new_seg)
     return out
 
 
@@ -919,7 +931,8 @@ def _run_chunked_transcription(job_id: str, job: dict[str, Any]) -> dict[str, An
                     "completedChunks": index,
                     "currentChunk": index if index < total_chunks else total_chunks,
                     "partialText": partial_text,
-                    "partialSegments": all_segments,
+                    # Lean copy — word arrays are kept in-memory for diarization only.
+                    "partialSegments": [{k: v for k, v in s.items() if k != "words"} for s in all_segments],
                 })
             finally:
                 _safe_unlink(chunk_path)
@@ -948,6 +961,11 @@ def _run_chunked_transcription(job_id: str, job: dict[str, Any]) -> dict[str, An
         else:
             log.warning("diarization requested but unavailable (%s)",
                         diarization.status().get("reason"))
+
+    # Drop internal word-timestamp arrays (used only for diarization splitting)
+    # so they never bloat the job payload / API response.
+    for _s in all_segments:
+        _s.pop("words", None)
 
     text = " ".join(s["text"] for s in all_segments).strip()
     return {

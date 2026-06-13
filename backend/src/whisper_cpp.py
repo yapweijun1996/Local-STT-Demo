@@ -62,6 +62,40 @@ def installed_models() -> dict[str, bool]:
     return result
 
 
+def _words_from_cpp_tokens(seg: dict) -> list[dict]:
+    """Merge whisper.cpp `-ojf` sub-word tokens into word-level timestamps.
+
+    whisper.cpp emits BPE tokens: a new word starts with a leading space, and
+    continuation pieces have none. Special tokens ([_BEG_], [_TT_123], …) carry
+    no real text and are skipped. Offsets are already in ms.
+    """
+    words: list[dict] = []
+    cur: dict | None = None
+    for tok in seg.get("tokens", []):
+        raw = str(tok.get("text", ""))
+        # Skip whisper.cpp special / timestamp tokens.
+        if raw.startswith("[_") or (raw.startswith("[") and raw.endswith("]")):
+            continue
+        piece = raw
+        starts_word = piece.startswith(" ") or cur is None
+        piece = piece.strip()
+        if not piece:
+            continue
+        off = tok.get("offsets", {}) or {}
+        f, t = off.get("from"), off.get("to")
+        if starts_word:
+            if cur and cur["word"]:
+                words.append(cur)
+            cur = {"startMs": f, "endMs": t, "word": piece}
+        else:
+            cur["word"] += piece
+            if t is not None:
+                cur["endMs"] = t
+    if cur and cur["word"]:
+        words.append(cur)
+    return [w for w in words if w.get("startMs") is not None and w.get("endMs") is not None]
+
+
 def transcribe_cpp(
     audio_path: str,
     model_name: str = "base",
@@ -123,6 +157,7 @@ def transcribe_cpp(
             "endMs": seg.get("offsets", {}).get("to"),
             "text": t,
             "language": raw.get("result", {}).get("language", language),
+            "words": _words_from_cpp_tokens(seg),
         })
         text_parts.append(t)
 

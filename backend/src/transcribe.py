@@ -119,6 +119,23 @@ def convert_to_wav(source: str, dest: str) -> None:
 
 # ── Core transcription ─────────────────────────────────────────────────
 
+def _words_from_segment(seg, offset_s: float = 0.0) -> list[dict]:
+    """Extract word-level timestamps from a faster-whisper segment (when
+    word_timestamps=True). Returns [] if the model produced none."""
+    words = getattr(seg, "words", None) or []
+    out: list[dict] = []
+    for w in words:
+        text = (getattr(w, "word", "") or "").strip()
+        if not text:
+            continue
+        out.append({
+            "startMs": round((offset_s + w.start) * 1000),
+            "endMs": round((offset_s + w.end) * 1000),
+            "word": text,
+        })
+    return out
+
+
 def transcribe(
     audio_path: str,
     model_name: str = "large-v3-turbo",
@@ -157,7 +174,7 @@ def transcribe(
             language=language,
             vad_filter=True,
             initial_prompt=prompt or None,
-            word_timestamps=False,
+            word_timestamps=True,
         )
         segments_out: list[dict] = []
         text_parts: list[str] = []
@@ -168,6 +185,7 @@ def transcribe(
                 "endMs": round(seg.end * 1000),
                 "text": t,
                 "language": info.language,
+                "words": _words_from_segment(seg),
             })
             text_parts.append(t)
         return {
@@ -194,7 +212,7 @@ def transcribe(
                 language=None,  # auto-detect per segment
                 vad_filter=False,  # already VAD'd
                 initial_prompt=prompt or None,
-                word_timestamps=False,
+                word_timestamps=True,
             )
 
             dominant_lang = dominant_lang or seg_info.language
@@ -208,6 +226,7 @@ def transcribe(
                     "endMs": round((start_s + seg.end) * 1000),
                     "text": t,
                     "language": seg_info.language,
+                    "words": _words_from_segment(seg, offset_s=start_s),
                 })
                 all_text.append(t)
 

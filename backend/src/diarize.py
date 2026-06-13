@@ -376,6 +376,75 @@ def _segment_runs(
     return [(int(a), int(b), sp) for a, b, sp in runs]
 
 
+def _speaker_for_span(start: int, end: int, turns: list[dict[str, Any]]) -> str:
+    """Best speaker for a [start, end] span by max overlap; nearest turn by
+    midpoint when nothing overlaps."""
+    best_sp, best_ov = None, 0
+    for t in turns:
+        ov = _overlap_ms(start, end, t["startMs"], t["endMs"])
+        if ov > best_ov:
+            best_ov, best_sp = ov, t["speaker"]
+    if best_sp is None:
+        mid = (start + end) / 2
+        best_sp = min(turns, key=lambda t: abs(((t["startMs"] + t["endMs"]) / 2) - mid))["speaker"]
+    return best_sp
+
+
+def _split_by_words(
+    seg: dict[str, Any], words: list[dict[str, Any]], turns: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Split a multi-speaker segment at WORD granularity: label each word by the
+    diarization turn it overlaps, group consecutive same-speaker words, then fold
+    sub-_MIN_RUN_MS groups into a neighbour to avoid one-word flicker."""
+    labelled = [(w, _speaker_for_span(int(w["startMs"]), int(w["endMs"]), turns)) for w in words]
+
+    # Group consecutive same-speaker words.
+    groups: list[dict[str, Any]] = []
+    for w, sp in labelled:
+        if groups and groups[-1]["speaker"] == sp:
+            groups[-1]["words"].append(w)
+        else:
+            groups.append({"speaker": sp, "words": [w]})
+
+    # Fold tiny groups into the longer adjacent neighbour (relabel their words).
+    changed = True
+    while changed and len(groups) > 1:
+        changed = False
+        for i, g in enumerate(groups):
+            dur = int(g["words"][-1]["endMs"]) - int(g["words"][0]["startMs"])
+            if dur >= _MIN_RUN_MS:
+                continue
+            left, right = (groups[i - 1] if i > 0 else None), (groups[i + 1] if i < len(groups) - 1 else None)
+            keep = left if (left and (not right or len(left["words"]) >= len(right["words"]))) else right
+            keep["words"].extend(g["words"])
+            keep["words"].sort(key=lambda w: int(w["startMs"]))
+            groups.pop(i)
+            merged: list[dict[str, Any]] = []
+            for gg in groups:
+                if merged and merged[-1]["speaker"] == gg["speaker"]:
+                    merged[-1]["words"].extend(gg["words"])
+                else:
+                    merged.append(gg)
+            groups[:] = merged
+            changed = True
+            break
+
+    out: list[dict[str, Any]] = []
+    for g in groups:
+        ws = g["words"]
+        piece = " ".join(w["word"] for w in ws).strip()
+        if not piece:
+            continue
+        seg2 = dict(seg)
+        seg2.pop("words", None)
+        seg2["startMs"] = int(ws[0]["startMs"])
+        seg2["endMs"] = int(ws[-1]["endMs"])
+        seg2["text"] = piece
+        seg2["speaker"] = g["speaker"]
+        out.append(seg2)
+    return out
+
+
 def assign_speakers(
     segments: list[dict[str, Any]],
     turns: list[dict[str, Any]],
@@ -404,6 +473,7 @@ def assign_speakers(
             mid = (s_start + s_end) / 2
             sp = min(turns, key=lambda t: abs(((t["startMs"] + t["endMs"]) / 2) - mid))["speaker"]
             seg2 = dict(seg)
+            seg2.pop("words", None)
             seg2["speaker"] = sp
             out.append(seg2)
             seen.add(sp)
@@ -418,22 +488,32 @@ def assign_speakers(
 
         if len(by_speaker) == 1 or by_speaker[top_sp] / covered >= _DOMINANCE:
             seg2 = dict(seg)
+            seg2.pop("words", None)
             seg2["speaker"] = top_sp
             out.append(seg2)
             seen.add(top_sp)
             continue
 
-        # Genuine multi-speaker segment → split text across the runs.
-        texts = _split_text_by_proportions(str(seg.get("text") or ""), [b - a for a, b, _ in runs])
-        for (a, b, sp), piece in zip(runs, texts):
-            piece = piece.strip()
-            if not piece:
-                continue
-            seg2 = dict(seg)
-            seg2["startMs"], seg2["endMs"] = a, b
-            seg2["text"] = piece
-            seg2["speaker"] = sp
+        # Genuine multi-speaker segment → split. Prefer precise WORD-level split
+        # when word timestamps exist; else fall back to time-proportional text.
+        words = seg.get("words") or []
+        if words:
+            pieces = _split_by_words(seg, words, turns)
+        else:
+            texts = _split_text_by_proportions(str(seg.get("text") or ""), [b - a for a, b, _ in runs])
+            pieces = []
+            for (a, b, sp), piece in zip(runs, texts):
+                piece = piece.strip()
+                if not piece:
+                    continue
+                seg2 = dict(seg)
+                seg2.pop("words", None)
+                seg2["startMs"], seg2["endMs"] = a, b
+                seg2["text"] = piece
+                seg2["speaker"] = sp
+                pieces.append(seg2)
+        for seg2 in pieces:
             out.append(seg2)
-            seen.add(sp)
+            seen.add(seg2["speaker"])
 
     return out, len(seen)
