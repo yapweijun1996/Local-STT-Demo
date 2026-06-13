@@ -357,6 +357,14 @@
   .sk-line.w90 { width: 90%; } .sk-line.w70 { width: 70%; } .sk-line.w50 { width: 50%; }
   @keyframes sk-shimmer { 100% { transform: translateX(100%); } }
   @media (prefers-reduced-motion: reduce) { .sk-line::after, .sk-dots i { animation: none; } }
+
+  /* iOS "Add to Home Screen" instructions (iOS has no programmatic install) */
+  .ios-sheet { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.5); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
+  .ios-sheet[hidden] { display: none; }
+  .ios-sheet-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 22px 20px; max-width: 330px; width: 100%; text-align: center; box-shadow: 0 24px 64px rgba(0,0,0,.45); }
+  .ios-sheet-title { font-weight: 700; font-size: 16px; margin-bottom: 10px; color: var(--text); }
+  .ios-sheet-body { color: var(--muted); font-size: 14px; line-height: 1.55; margin: 0 0 18px; }
+  .ios-sheet-body svg { width: 18px; height: 18px; vertical-align: -4px; color: var(--primary); }
 </style>
 </head>
 <body>
@@ -714,6 +722,14 @@ print(r.json()["text"])</pre></div>
   </div>
 </div>
 
+<div id="iosInstall" class="ios-sheet" hidden>
+  <div class="ios-sheet-card" role="dialog" aria-modal="true" aria-labelledby="iosInstallTitle">
+    <div class="ios-sheet-title" id="iosInstallTitle">Install Local STT</div>
+    <p class="ios-sheet-body" id="iosInstallBody">Tap Share, then “Add to Home Screen”.</p>
+    <button class="btn btn-primary" id="iosInstallClose" type="button">OK</button>
+  </div>
+</div>
+
 <script src="vendor/webm-muxer.min.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -730,6 +746,7 @@ const ui = {
   health: $("health"), themeToggle: $("themeToggle"), installBtn: $("installBtn"),
   modeToggle: $("modeToggle"), ioRecordBtn: $("ioRecordBtn"), ioUploadBtn: $("ioUploadBtn"),
   ioRecordLbl: $("ioRecordLbl"), ioUploadLbl: $("ioUploadLbl"),
+  iosInstall: $("iosInstall"), iosInstallTitle: $("iosInstallTitle"), iosInstallBody: $("iosInstallBody"), iosInstallClose: $("iosInstallClose"),
   historyPanel: $("historyPanel"), historyList: $("historyList"), clearHistoryBtn: $("clearHistoryBtn"),
   historyEmpty: $("historyEmpty"), historyCount: $("historyCount"),
   menuBtn: $("menuBtn"), scrim: $("scrim"), viewTitle: $("viewTitle"),
@@ -965,8 +982,8 @@ themeQuery.addEventListener?.("change", () => { if (themeMode === "system") appl
 
 // ---------- i18n (中/英) — new UI strings; extend as the page is localized ----------
 const I18N = {
-  en: { toAdvanced: "Switch to Advanced mode", toSimple: "Switch to Simple mode", record: "Record", upload: "Upload", installApp: "Install app", uploading: "Uploading", queued: "Queued", transcribing: "Transcribing" },
-  zh: { toAdvanced: "切换到高级模式", toSimple: "切换到普通模式", record: "录音", upload: "上传", installApp: "安装软件", uploading: "上传中", queued: "排队中", transcribing: "正在转录" },
+  en: { toAdvanced: "Switch to Advanced mode", toSimple: "Switch to Simple mode", record: "Record", upload: "Upload", installApp: "Install app", uploading: "Uploading", queued: "Queued", transcribing: "Transcribing", iosTitle: "Install Local STT", iosBody: "Tap {share} in the toolbar, then “Add to Home Screen”." },
+  zh: { toAdvanced: "切换到高级模式", toSimple: "切换到普通模式", record: "录音", upload: "上传", installApp: "安装软件", uploading: "上传中", queued: "排队中", transcribing: "正在转录", iosTitle: "安装 Local STT", iosBody: "点工具栏的 {share}，然后选「添加到主屏幕」。" },
 };
 const LANG = (() => {
   try { const s = localStorage.getItem("stt-lang"); if (s === "en" || s === "zh") return s; } catch {}
@@ -1617,10 +1634,39 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     });
   });
 }
+// ---------- Install (PWA), platform-aware ----------
+const _isStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+const _isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);  // iPadOS reports as Mac
+const _shareSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>';
 let deferredPrompt = null;
-window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredPrompt = e; ui.installBtn.hidden = false; });
-ui.installBtn.addEventListener("click", async () => { if (!deferredPrompt) return; deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt = null; ui.installBtn.hidden = true; });
-window.addEventListener("appinstalled", () => { ui.installBtn.hidden = true; });
+
+// iOS instruction sheet text (i18n).
+ui.iosInstallTitle.textContent = t("iosTitle");
+ui.iosInstallBody.innerHTML = t("iosBody").replace("{share}", _shareSvg);
+const hideIosSheet = () => { ui.iosInstall.hidden = true; };
+ui.iosInstallClose.addEventListener("click", hideIosSheet);
+ui.iosInstall.addEventListener("click", (e) => { if (e.target === ui.iosInstall) hideIosSheet(); });  // tap backdrop
+
+if (_isStandalone) {
+  // Already installed / running as an app — never offer install.
+  ui.installBtn.hidden = true;
+} else if (_isIOS) {
+  // iOS Safari has no beforeinstallprompt; offer manual Add-to-Home-Screen steps.
+  ui.installBtn.hidden = false;
+  ui.installBtn.addEventListener("click", () => { ui.iosInstall.hidden = false; });
+} else {
+  // Chromium (Android / desktop): native install prompt.
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferredPrompt = e; ui.installBtn.hidden = false; });
+  ui.installBtn.addEventListener("click", async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    await deferredPrompt.userChoice;
+    deferredPrompt = null;
+    ui.installBtn.hidden = true;
+  });
+}
+window.addEventListener("appinstalled", () => { ui.installBtn.hidden = true; hideIosSheet(); });
 </script>
 </body>
 </html>
