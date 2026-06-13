@@ -2,7 +2,7 @@
 <html lang="en" dir="ltr">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>Local STT — Admin</title>
 <meta name="description" content="Server-side speech-to-text. Upload mp4/mp3/wav/m4a/ogg or record from the mic; whisper.cpp transcribes locally on the server." />
 <meta name="application-name" content="Local STT" />
@@ -730,6 +730,17 @@ print(r.json()["text"])</pre></div>
   </div>
 </div>
 
+<div id="updateSheet" class="ios-sheet" hidden>
+  <div class="ios-sheet-card" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+    <div class="ios-sheet-title" id="updateTitle">Update available</div>
+    <p class="ios-sheet-body" id="updateBody">A new version is ready.</p>
+    <div style="display:flex;gap:10px;justify-content:center">
+      <button class="btn btn-ghost" id="updateLater" type="button">Later</button>
+      <button class="btn btn-primary" id="updateBtn" type="button">Update</button>
+    </div>
+  </div>
+</div>
+
 <script src="vendor/webm-muxer.min.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -747,6 +758,7 @@ const ui = {
   modeToggle: $("modeToggle"), ioRecordBtn: $("ioRecordBtn"), ioUploadBtn: $("ioUploadBtn"),
   ioRecordLbl: $("ioRecordLbl"), ioUploadLbl: $("ioUploadLbl"),
   iosInstall: $("iosInstall"), iosInstallTitle: $("iosInstallTitle"), iosInstallBody: $("iosInstallBody"), iosInstallClose: $("iosInstallClose"),
+  updateSheet: $("updateSheet"), updateTitle: $("updateTitle"), updateBody: $("updateBody"), updateBtn: $("updateBtn"), updateLater: $("updateLater"),
   historyPanel: $("historyPanel"), historyList: $("historyList"), clearHistoryBtn: $("clearHistoryBtn"),
   historyEmpty: $("historyEmpty"), historyCount: $("historyCount"),
   menuBtn: $("menuBtn"), scrim: $("scrim"), viewTitle: $("viewTitle"),
@@ -982,8 +994,8 @@ themeQuery.addEventListener?.("change", () => { if (themeMode === "system") appl
 
 // ---------- i18n (中/英) — new UI strings; extend as the page is localized ----------
 const I18N = {
-  en: { toAdvanced: "Switch to Advanced mode", toSimple: "Switch to Simple mode", record: "Record", upload: "Upload", installApp: "Install app", uploading: "Uploading", queued: "Queued", transcribing: "Transcribing", iosTitle: "Install Local STT", iosBody: "Tap {share} in the toolbar, then “Add to Home Screen”." },
-  zh: { toAdvanced: "切换到高级模式", toSimple: "切换到普通模式", record: "录音", upload: "上传", installApp: "安装软件", uploading: "上传中", queued: "排队中", transcribing: "正在转录", iosTitle: "安装 Local STT", iosBody: "点工具栏的 {share}，然后选「添加到主屏幕」。" },
+  en: { toAdvanced: "Switch to Advanced mode", toSimple: "Switch to Simple mode", record: "Record", upload: "Upload", installApp: "Install app", uploading: "Uploading", queued: "Queued", transcribing: "Transcribing", iosTitle: "Install Local STT", iosBody: "Tap {share} in the toolbar, then “Add to Home Screen”.", updateTitle: "Update available", updateBody: "A new version is ready.", update: "Update", later: "Later" },
+  zh: { toAdvanced: "切换到高级模式", toSimple: "切换到普通模式", record: "录音", upload: "上传", installApp: "安装软件", uploading: "上传中", queued: "排队中", transcribing: "正在转录", iosTitle: "安装 Local STT", iosBody: "点工具栏的 {share}，然后选「添加到主屏幕」。", updateTitle: "有新版本", updateBody: "新版本已就绪。", update: "更新", later: "稍后" },
 };
 const LANG = (() => {
   try { const s = localStorage.getItem("stt-lang"); if (s === "en" || s === "zh") return s; } catch {}
@@ -1619,18 +1631,29 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   // Reload once when a NEW service worker takes control (i.e. a deploy landed).
   // hadController distinguishes an update from the very first SW install.
   let hadController = !!navigator.serviceWorker.controller;
+  let _reloading = false;
   navigator.serviceWorker.addEventListener("controllerchange", () => {
     if (!hadController) { hadController = true; return; }
-    // Never destroy in-flight work — the next update check retries the reload.
-    if (transcribing || (mediaRec && mediaRec.state === "recording")) return;
+    if (_reloading) return; _reloading = true;       // the user clicked Update → reload to the new version
     location.reload();
   });
+  // A waiting worker means a new version is installed and ready — prompt the user.
+  function watchWorker(reg) {
+    if (reg.waiting && navigator.serviceWorker.controller) { _waitingWorker = reg.waiting; maybePromptUpdate(); }
+    reg.addEventListener("updatefound", () => {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener("statechange", () => {
+        if (nw.state === "installed" && navigator.serviceWorker.controller) { _waitingWorker = nw; maybePromptUpdate(); }
+      });
+    });
+  }
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js").catch(() => {});
+    navigator.serviceWorker.register("./sw.js").then(watchWorker).catch(() => {});
     const ping = () => navigator.serviceWorker.getRegistration().then(r => r && r.update()).catch(() => {});
     setInterval(ping, 3600000);                                  // hourly
     document.addEventListener("visibilitychange", () => {        // iOS standalone resume
-      if (document.visibilityState === "visible") ping();
+      if (document.visibilityState === "visible") { ping(); maybePromptUpdate(); }
     });
   });
 }
@@ -1648,8 +1671,17 @@ const hideIosSheet = () => { ui.iosInstall.hidden = true; };
 ui.iosInstallClose.addEventListener("click", hideIosSheet);
 ui.iosInstall.addEventListener("click", (e) => { if (e.target === ui.iosInstall) hideIosSheet(); });  // tap backdrop
 
-if (_isStandalone) {
-  // Already installed / running as an app — never offer install.
+// Remember "installed" across browser tabs: iOS never fires `appinstalled` and a
+// browser tab can't detect an installed PWA, so once we've EVER seen standalone
+// mode (the app opened from the home screen), persist it and stop offering install.
+const INSTALLED_KEY = "stt-installed";
+const _flagGet = () => { try { return localStorage.getItem(INSTALLED_KEY) === "1"; } catch { return false; } };
+const _flagSet = () => { try { localStorage.setItem(INSTALLED_KEY, "1"); } catch {} };
+if (_isStandalone) _flagSet();
+const _knownInstalled = _isStandalone || _flagGet();
+
+if (_knownInstalled) {
+  // Already installed (running standalone, or seen standalone before) — never offer.
   ui.installBtn.hidden = true;
 } else if (_isIOS) {
   // iOS Safari has no beforeinstallprompt; offer manual Add-to-Home-Screen steps.
@@ -1666,7 +1698,25 @@ if (_isStandalone) {
     ui.installBtn.hidden = true;
   });
 }
-window.addEventListener("appinstalled", () => { ui.installBtn.hidden = true; hideIosSheet(); });
+window.addEventListener("appinstalled", () => { _flagSet(); ui.installBtn.hidden = true; hideIosSheet(); });
+
+// ---------- Update prompt: ask before reloading to a new version ----------
+ui.updateTitle.textContent = t("updateTitle");
+ui.updateBody.textContent = t("updateBody");
+ui.updateBtn.textContent = t("update");
+ui.updateLater.textContent = t("later");
+let _waitingWorker = null;
+function maybePromptUpdate() {
+  if (!_waitingWorker || !ui.updateSheet.hidden) return;
+  if (transcribing || (mediaRec && mediaRec.state === "recording")) return;  // don't interrupt work
+  ui.updateSheet.hidden = false;
+}
+ui.updateLater.addEventListener("click", () => { ui.updateSheet.hidden = true; });
+ui.updateSheet.addEventListener("click", (e) => { if (e.target === ui.updateSheet) ui.updateSheet.hidden = true; });
+ui.updateBtn.addEventListener("click", () => {
+  ui.updateSheet.hidden = true;
+  if (_waitingWorker) _waitingWorker.postMessage({ type: "SKIP_WAITING" });  // → activate → controllerchange → reload
+});
 </script>
 </body>
 </html>

@@ -4,7 +4,7 @@
    - Same-origin GET assets: stale-while-revalidate.
    - NEVER touches: non-GET (transcribe POST), cross-origin (CDN / HF model
      downloads), or API endpoints (/api, /health) — those must hit the network. */
-const VERSION = "2026-06-13-9";
+const VERSION = "2026-06-14-1";
 const CACHE = `local-stt-${VERSION}`;
 const SHELL = [
   "./",
@@ -18,7 +18,9 @@ const SHELL = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // No skipWaiting() — the new SW waits so the page can prompt the user to update.
+  // The page sends {type:"SKIP_WAITING"} (below) when the user clicks Update.
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
 });
 
 self.addEventListener("activate", (e) => {
