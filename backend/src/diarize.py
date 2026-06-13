@@ -202,10 +202,20 @@ def diarize_file(
         log.error("diarization: inference failed on %s (%s)", wav_path, exc)
         return []
 
-    # pyannote.audio 4.0 returns a DiarizeOutput; older versions return the
-    # Annotation directly. `.speaker_diarization` is the regular (non-exclusive)
-    # annotation we tag against.
-    diarization = getattr(result, "speaker_diarization", result)
+    # pyannote.audio 4.0 returns a DiarizeOutput with two annotations:
+    #   - speaker_diarization: regular (speakers may overlap in time)
+    #   - exclusive_speaker_diarization: at most ONE speaker active at any instant,
+    #     purpose-built for clean reconciliation with STT (word) timestamps.
+    # We tag transcript words, so exclusive gives unambiguous word→speaker mapping
+    # (no overlapping turns to disambiguate). Prefer it; fall back to regular, then
+    # to a legacy (3.x) Annotation returned directly. DIARIZATION_EXCLUSIVE=0 opts out.
+    use_exclusive = os.environ.get("DIARIZATION_EXCLUSIVE", "1") != "0"
+    if use_exclusive and hasattr(result, "exclusive_speaker_diarization"):
+        diarization = result.exclusive_speaker_diarization
+    elif hasattr(result, "speaker_diarization"):
+        diarization = result.speaker_diarization
+    else:
+        diarization = result
 
     # Map pyannote labels (SPEAKER_00 …) to friendly numbers by first appearance.
     label_to_name: dict[str, str] = {}
