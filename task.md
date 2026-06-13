@@ -2,6 +2,40 @@
 
 Newest first. Scope: `backend/public/` live UI (stt.yapweijun1996.com) unless noted.
 
+## 2026-06-14 — UI: Simple/Advanced modes + transcript states + PWA install/update/viewport
+
+All in `backend/public/index.html` (+ `sw.js` cache bumps). Verified in Chrome desktop + 390px.
+
+- **Simple / Advanced mode toggle (progressive disclosure)**: new users land in **Simple** —
+  a Record/Upload segmented toggle (Record default) → transcript; the Settings card, KPI strip
+  and Developer nav are hidden, and Simple submits fast zero-config defaults (whisper-cpp/Metal +
+  large-v3, language auto, no diarization). A topbar SVG toggle (immediate CSS hover tooltip)
+  switches to **Advanced** = the full existing layout. Mode persisted in `localStorage.stt-mode`.
+  Lightweight **i18n** scaffold (en/zh, auto-detected from `navigator.language`) for new strings.
+- **Install app → icon button**: replaced the wide text button with a download SVG icon
+  (declutters the topbar, esp. mobile) + i18n hover tooltip.
+- **Transcript states**: card is hidden when idle, shows a **shimmer skeleton** while loading
+  (caption follows the real phase Uploading → Queued → Transcribing, with pulsing dots and a
+  cascading shimmer), and the real transcript once any text (partial or final) lands. Live
+  partial-text streaming preserved (skeleton only before first words). Empty stat badge
+  auto-hides (`#stat:empty`). Respects `prefers-reduced-motion`.
+- **PWA fixes** (end-user feedback):
+  - Install button is platform-aware: **iOS** (no `beforeinstallprompt`) opens an "Add to Home
+    Screen" instruction sheet (Share icon, i18n); **Chromium** uses the native prompt; **installed**
+    hides it. Persisted via `localStorage.stt-installed` (set once standalone is ever seen, since
+    iOS never fires `appinstalled`) **plus** a bulletproof CSS `@media (display-mode: standalone)
+    { #installBtn { display:none } }` so a stale-cached HTML can't show it.
+  - **Update prompt instead of silent reload**: `sw.js` install no longer calls `skipWaiting()`;
+    the page detects the waiting worker and shows an "Update available" modal (Update / Later,
+    i18n). Update → `postMessage({type:"SKIP_WAITING"})` → activate → `controllerchange` → reload.
+    Deferred while recording/transcribing.
+  - **Viewport locked**: `maximum-scale=1, user-scalable=no` (no pinch-zoom; a11y trade-off).
+- **Gotcha logged**: an end user saw the install button inside the installed iOS app — root cause
+  was a **stale cached HTML** (the app was installed before these fixes), not a logic bug
+  (simulating standalone confirmed the current JS hides it). Fix path: deploy + remove/re-add to
+  home screen, and the CSS media-query hide as the cache-proof backstop. Also a real bug fixed:
+  the iOS sheet markup had to live **before** `<script>` or the `ui` lookups returned null.
+
 ## 2026-06-13 — Upgrade diarization to pyannote community-1 (pyannote.audio 4.0, Python 3.12)
 
 Swapped the diarization model from `speaker-diarization-3.1` to `speaker-diarization-community-1`
