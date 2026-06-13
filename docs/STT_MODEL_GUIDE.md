@@ -85,7 +85,8 @@ faster-whisper models that are actually installed; the API validates the same.
 ## Speaker diarization ("who spoke when")
 
 Tick **Detect speakers** (on by default) to label each segment `Speaker 1 / 2 / …`. Runs
-pyannote `speaker-diarization-3.1` on the whole file (token-free, offline). Two accuracy levers:
+pyannote `speaker-diarization-community-1` (pyannote.audio 4.0) on the whole file (token-free,
+offline) — better speaker counting/assignment than the older 3.1. Two accuracy levers:
 
 - **Set the speaker count** when you know it (the "How many speakers?" dropdown / `speakers`
   form field, 1–8). This is the **biggest** accuracy boost — auto-estimation frequently

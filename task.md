@@ -2,6 +2,34 @@
 
 Newest first. Scope: `backend/public/` live UI (stt.yapweijun1996.com) unless noted.
 
+## 2026-06-13 — Upgrade diarization to pyannote community-1 (pyannote.audio 4.0, Python 3.12)
+
+Swapped the diarization model from `speaker-diarization-3.1` to `speaker-diarization-community-1`
+(pyannote.audio 4.0) — markedly better speaker counting/assignment (the root cause of inaccurate
+labels), still free/local/offline. Official DER drops on most benchmarks (AMI-SDM 22.7→19.9,
+AliMeeting 24.5→20.3, MSDWild 25.4→22.8).
+
+- **Python rebuild**: 4.0 needs Python ≥3.10; the prod venv was 3.9. Built a new `.venv312`
+  alongside (old `.venv` kept for rollback) and pointed pm2 at it.
+  - ⚠️ **Homebrew `python@3.12` was unusable**: broken `libexpat` linkage (`pyexpat` →
+    `Symbol not found: _XML_SetAllocTrackerActivationThreshold`, hard-linked to system
+    `/usr/lib/libexpat.1.dylib`), which breaks `pip`. Fix: installed **`uv`** and used a
+    `uv`-managed **standalone CPython 3.12** (self-contained libexpat) — sidesteps the whole
+    Homebrew/Xcode-CLT mess.
+- **`diarize.py` (4.0 API)**: default model → community-1; `Pipeline.from_pretrained(token=…)`
+  (legacy `use_auth_token` removed); handle new `DiarizeOutput.speaker_diarization`; deleted the
+  3.x `torch.load` / speechbrain / `hf_hub_download` monkeypatches — 4.0 loads cleanly without them.
+- **`requirements.txt`**: `pyannote.audio>=4.0,<5.0`.
+- **`ecosystem.config.cjs`**: `script` → `.venv312/bin/python`; `DIARIZATION_MODEL=community-1`.
+- ⚠️ **HF cache gotcha**: community-1 first downloaded to the *default* `~/.cache/huggingface/hub`,
+  but prod sets `HF_HOME=/Users/.../stt-models` → offline load FAILED (model not in that cache).
+  Fix: re-downloaded with `HF_HOME=stt-models` so it lives in `stt-models/hub`. (3.1 didn't hit
+  this because old pyannote used `~/.cache/torch/pyannote`; 4.0 uses the HF cache.)
+- **Verified**: community-1 loads+infers under 4.0 + MPS; loads OFFLINE under prod HF_HOME with no
+  token; full server boots under `.venv312` (isolated :6699 smoke test, separate Redis db); prod
+  E2E transcribe+diarize on :6601 clean. NOTE: multi-speaker accuracy A/B still needs a real
+  interview clip — jfk.wav is single-speaker. The HF token used for download should be rotated.
+
 ## 2026-06-13 — Diarization accuracy: default-on + speaker-count hint + word-level splitting
 
 Three rounds addressing "speaker detection is inaccurate / I don't see speakers".
