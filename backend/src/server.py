@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -60,6 +60,14 @@ UPLOADS_MAX_BYTES = int(os.environ.get("UPLOADS_MAX_BYTES", str(5 * 1024 * 1024 
 ENABLE_CHUNK_TRANSCRIPTION = os.environ.get("ENABLE_CHUNK_TRANSCRIPTION", "1") != "0"
 CHUNK_SECONDS = max(1, int(os.environ.get("CHUNK_SECONDS", "180")))
 CHUNK_OVERLAP_SECONDS = max(0, int(os.environ.get("CHUNK_OVERLAP_SECONDS", "5")))
+DEFAULT_CORS_ORIGINS = "http://localhost:6601,http://127.0.0.1:6601,http://localhost:8789,http://127.0.0.1:8789"
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("STT_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
+    if origin.strip()
+]
+API_KEY = os.environ.get("STT_API_KEY", "").strip()
+RATE_LIMIT_PER_MINUTE = max(0, int(os.environ.get("STT_RATE_LIMIT_PER_MINUTE", "20")))
 # Speaker diarization (pyannote). Off by default per-request; this env is the
 # server-wide kill switch. Requires pyannote.audio + HF_TOKEN (see diarize.py).
 ENABLE_DIARIZATION = os.environ.get("ENABLE_DIARIZATION", "1") != "0"
@@ -110,9 +118,9 @@ app = FastAPI(title="Local STT", version="0.6.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["POST", "GET", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization", "X-STT-API-Key"],
 )
 
 # ── Runtime state ──────────────────────────────────────────────────────
@@ -121,6 +129,7 @@ _leader_token = f"{os.getpid()}-{uuid.uuid4().hex}"
 _worker_tasks: list[asyncio.Task] = []
 _leader_task: asyncio.Task | None = None
 _cleanup_task: asyncio.Task | None = None
+_leader_manager_task: asyncio.Task | None = None
 
 
 def _init_redis() -> None:
@@ -153,6 +162,50 @@ def _require_redis_response():
             status_code=503,
         )
     return None
+
+
+def _client_ip(request: Request) -> str:
+    return (
+        request.headers.get("cf-connecting-ip")
+        or request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+        or (request.client.host if request.client else "unknown")
+    )
+
+
+def _authorize_request(request: Request) -> JSONResponse | None:
+    if not API_KEY:
+        return None
+    bearer = request.headers.get("authorization", "")
+    supplied = request.headers.get("x-stt-api-key", "")
+    if bearer.lower().startswith("bearer "):
+        supplied = bearer[7:].strip()
+    if supplied == API_KEY:
+        return None
+    return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+
+def _rate_limit_request(request: Request) -> JSONResponse | None:
+    if _redis is None or RATE_LIMIT_PER_MINUTE <= 0:
+        return None
+    now_minute = int(time.time() // 60)
+    key = f"stt:rate:{_client_ip(request)}:{now_minute}"
+    try:
+        count = int(_redis.incr(key))
+        if count == 1:
+            _redis.expire(key, 90)
+    except Exception as exc:
+        log.warning("Rate-limit check failed: %s", exc)
+        return None
+    if count <= RATE_LIMIT_PER_MINUTE:
+        return None
+    return JSONResponse(
+        {
+            "error": "Rate limit exceeded. Try again later.",
+            "limitPerMinute": RATE_LIMIT_PER_MINUTE,
+        },
+        status_code=429,
+        headers={"Retry-After": "60"},
+    )
 
 
 def _job_get(job_id: str) -> dict[str, Any] | None:
@@ -356,6 +409,34 @@ async def _cleanup_loop() -> None:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
 
 
+def _ensure_workers_started() -> None:
+    live_workers = [task for task in _worker_tasks if not task.done()]
+    _worker_tasks[:] = live_workers
+    missing = WORKER_CONCURRENCY - len(_worker_tasks)
+    for i in range(missing):
+        _worker_tasks.append(asyncio.create_task(_worker_loop(len(_worker_tasks) + 1)))
+
+
+async def _leader_manager_loop() -> None:
+    global _leader_task, _cleanup_task
+
+    while True:
+        if _is_leader():
+            await asyncio.sleep(max(1, LEADER_TTL // 2))
+            continue
+
+        if _acquire_leader():
+            log.info("Acquired STT queue leader lock; starting %s workers", WORKER_CONCURRENCY)
+            await asyncio.to_thread(_recover_jobs)
+            _ensure_workers_started()
+            if _leader_task is None or _leader_task.done():
+                _leader_task = asyncio.create_task(_refresh_leader_loop())
+            if _cleanup_task is None or _cleanup_task.done():
+                _cleanup_task = asyncio.create_task(_cleanup_loop())
+
+        await asyncio.sleep(max(1, LEADER_TTL // 3))
+
+
 async def _worker_loop(worker_id: int) -> None:
     while True:
         if not _is_leader():
@@ -407,28 +488,19 @@ async def _worker_loop(worker_id: int) -> None:
 
 @app.on_event("startup")
 async def _startup() -> None:
-    global _leader_task, _cleanup_task
+    global _leader_manager_task
 
     _init_redis()
     if _redis is None:
         return
 
     await asyncio.to_thread(_cleanup_orphan_uploads)
-
-    if _acquire_leader():
-        log.info("Acquired STT queue leader lock; starting %s workers", WORKER_CONCURRENCY)
-        _recover_jobs()
-        for i in range(WORKER_CONCURRENCY):
-            _worker_tasks.append(asyncio.create_task(_worker_loop(i + 1)))
-        _leader_task = asyncio.create_task(_refresh_leader_loop())
-        _cleanup_task = asyncio.create_task(_cleanup_loop())
-    else:
-        log.info("Another STT process owns the worker leader lock")
+    _leader_manager_task = asyncio.create_task(_leader_manager_loop())
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
-    for task in [*_worker_tasks, _leader_task, _cleanup_task]:
+    for task in [*_worker_tasks, _leader_task, _cleanup_task, _leader_manager_task]:
         if task is not None:
             task.cancel()
     if _is_leader():
@@ -478,6 +550,11 @@ async def health():
         "chunkTranscriptionEnabled": ENABLE_CHUNK_TRANSCRIPTION,
         "chunkSeconds": CHUNK_SECONDS,
         "chunkOverlapSeconds": CHUNK_OVERLAP_SECONDS,
+        "security": {
+            "apiKeyRequired": bool(API_KEY),
+            "rateLimitPerMinute": RATE_LIMIT_PER_MINUTE,
+            "corsOrigins": CORS_ORIGINS,
+        },
         "engines": engines,
         "diarization": {"enabled": ENABLE_DIARIZATION, **diarization.status()},
     }
@@ -486,6 +563,7 @@ async def health():
 # ── Transcribe: accept upload, queue job, return immediately ───────────
 @app.post("/api/transcribe")
 async def api_transcribe(
+    request: Request,
     audio: UploadFile = File(...),
     model: str = Form(""),
     language: str = Form("auto"),
@@ -495,9 +573,17 @@ async def api_transcribe(
     diarize: str = Form("0"),
     speakers: str = Form(""),
 ):
+    auth_error = _authorize_request(request)
+    if auth_error is not None:
+        return auth_error
+
     redis_error = _require_redis_response()
     if redis_error is not None:
         return redis_error
+
+    rate_error = _rate_limit_request(request)
+    if rate_error is not None:
+        return rate_error
 
     storage_error = _enforce_upload_capacity()
     if storage_error is not None:
@@ -619,7 +705,11 @@ async def api_transcribe(
 
 # ── Job status poll endpoint ───────────────────────────────────────────
 @app.get("/api/job/{job_id}")
-async def get_job(job_id: str):
+async def get_job(job_id: str, request: Request):
+    auth_error = _authorize_request(request)
+    if auth_error is not None:
+        return auth_error
+
     redis_error = _require_redis_response()
     if redis_error is not None:
         return redis_error

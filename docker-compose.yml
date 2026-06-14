@@ -10,6 +10,7 @@ services:
     environment:
       # faster-whisper model: tiny | base | small | medium | large-v3 | large-v3-turbo
       WHISPER_MODEL: "large-v3-turbo"
+      STT_ENGINE: "faster-whisper"
       TRANSCRIPTION_TIMEOUT: "0"
       JOB_TTL: "43200"
       WORKER_CONCURRENCY: "2"
@@ -20,6 +21,7 @@ services:
       CHUNK_SECONDS: "180"
       CHUNK_OVERLAP_SECONDS: "5"
       REDIS_URL: redis://redis:6379/0
+      STT_RATE_LIMIT_PER_MINUTE: "20"
       # Model cache dir (mounted volume). Keeps downloaded models across restarts.
       HF_HOME: /app/backend/vendor/models
     volumes:

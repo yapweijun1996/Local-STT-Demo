@@ -1,168 +1,133 @@
-# Local STT — Node.js + whisper.cpp backend
+# Local STT — Python FastAPI backend
 
-A small **Node.js (Express)** server that runs **whisper.cpp** locally for speech-to-text.
-Upload **mp4 / mp3 / wav / m4a / ogg** or record from the **mic** in the bundled web UI;
-the file is converted to 16 kHz mono by **ffmpeg** and transcribed by `whisper-cli`.
-Nothing is sent to any cloud — audio is processed on your machine and deleted after each request.
+Server-side speech-to-text backend for the bundled web UI and API clients. It accepts
+audio/video uploads, converts them to 16 kHz mono WAV with ffmpeg, queues work in Redis,
+and transcribes locally with either:
 
-This is the **server-side** counterpart to the zero-install browser demo in the repo root
-([`../index.html`](../index.html)). Use this backend when you want native speed, larger
-models, longer files, or to plug STT into an ERP / agent backend.
+- `whisper-cpp` for Apple Silicon / native GPU speed.
+- `faster-whisper` for Docker and CPU-friendly deployments.
 
-## Why a backend (vs. the browser demo)
-
-| | Browser (`../index.html`) | This Node backend |
-|---|---|---|
-| Install | none — double-click | Node + ffmpeg + compile whisper.cpp |
-| Engine | Transformers.js (ONNX, WebGPU/WASM) | whisper.cpp (native, Metal/CPU) |
-| Speed / long files | good, browser-bound | faster, server-bound |
-| Integration | client-only | HTTP API for ERP / agents |
+The API returns a `jobId` immediately, then the browser polls `/api/job/{jobId}` until
+the transcript is ready. Uploaded audio and intermediate chunks are deleted after each
+job finishes.
 
 ## Requirements
 
-- **Node.js** 18+
-- **ffmpeg** (audio/video → 16 kHz mono wav)
-- **cmake** + a C/C++ toolchain (to build whisper.cpp)
+- Python 3.12 recommended
+- ffmpeg
+- Redis
+- Optional native mode: whisper.cpp built with Metal/CUDA and local `ggml-*.bin` models
 
-macOS: `brew install cmake ffmpeg` · Windows: `winget install Kitware.CMake Gyan.FFmpeg`
+macOS:
 
-## Setup
+```bash
+brew install ffmpeg redis cmake
+```
+
+## Native Setup
 
 ```bash
 cd backend
-npm install
-npm run setup          # clones + builds whisper.cpp, downloads base + small models
+python3.12 -m venv .venv312
+. .venv312/bin/activate
+pip install -r requirements.txt
+
+# Optional: build whisper.cpp for native Apple Metal mode
+./scripts/setup-whisper-cpp.sh
 ```
 
-Want the most accurate model too? Download it during setup:
+Start Redis, then run:
 
 ```bash
-WHISPER_MODELS="base small large-v3" npm run setup
+redis-server
+python -m src.server
+# http://localhost:6601/
 ```
 
-Windows: `npm run setup:win`.
-
-### GitHub push note
-
-Model artifacts are intentionally kept local and excluded from git:
-
-- `backend/vendor/whisper.cpp/models/` (downloaded `.bin` models)
-- `backend/uploads/` and `backend/transcripts/` (runtime temp/output)
-
-So `git push` stays lightweight and does not include binary data.  
-If you need to bootstrap a fresh environment, run `npm run setup` there instead of checking in binaries.
-
-If you later want to version a small subset of models, do it via Git LFS and explicit patterns only
-after reviewing GitHub LFS quotas.
-
-## Run
+For native whisper.cpp mode, configure:
 
 ```bash
-npm start
-# → http://localhost:8789/
-```
-
-Web UI: open `http://localhost:8789/`. The health badge shows which models are installed.
-
-**Interaction model:** an **uploaded file** waits for you to click **Transcribe file** (you may
-want to change the model/language first). A **mic recording** transcribes **automatically when you
-press Stop** — Stop is treated as "I'm done, go". While a transcription is running the Transcribe
-button is disabled and shows "Transcribing…" so you can't double-submit. The mic also shows a live
-waveform while recording. It's an installable PWA (works offline for the UI shell over http/localhost).
-
-Health check:
-
-```bash
-curl -sS http://localhost:8789/health | jq .
-```
-
-Transcribe via API:
-
-```bash
-curl -sS -X POST http://localhost:8789/api/transcribe \
-  -F audio=@/path/to/clip.mp4 \
-  -F model=small \
-  -F language=auto \
-  -F 'prompt=ERP vocabulary: sales order, SKU A123, Acme Singapore.' \
-  | jq '{text,language,model,durationMs,segments}'
+export STT_ENGINE=whisper-cpp
+export WHISPER_MODEL=large-v3
+export WHISPER_CPP_DIR="$PWD/vendor/whisper.cpp"
+python -m src.server
 ```
 
 ## Docker
 
-Run the whole backend (Node + whisper.cpp + ffmpeg + web UI) in one container — no
-local toolchain needed. From the repo root:
+Docker uses `faster-whisper` by default because whisper.cpp GPU/Metal is not available
+inside the image.
 
 ```bash
 docker compose up --build
-# → http://localhost:8789/
+# http://localhost:6601/
 ```
 
-- whisper.cpp is **compiled into the image** (CPU build); ffmpeg is included.
-- Models are **not baked in** — they download into a named volume (`stt-models`) on
-  first start, controlled by `WHISPER_MODELS` (default `base`). They persist across restarts.
-- Want more accuracy? Edit `WHISPER_MODELS` in `docker-compose.yml`
-  (e.g. `"base small large-v3-turbo"` or `"base small large-v3"`) and restart;
-  only missing models download.
-- GPU/Metal isn't available in the CPU image (`WHISPER_USE_GPU=0`). For Apple Metal /
-  NVIDIA acceleration, run natively (`npm run setup && npm start`).
+Models are cached in the `stt-models` volume. The compose default is
+`WHISPER_MODEL=large-v3-turbo` and `STT_ENGINE=faster-whisper`.
 
-Without compose:
+## API
+
+Health:
 
 ```bash
-docker build -t local-stt-backend ./backend
-docker run --rm -p 8789:8789 -e WHISPER_MODELS="base" \
-  -v stt-models:/app/backend/vendor/whisper.cpp/models local-stt-backend
+curl -sS http://localhost:6601/health | jq .
 ```
 
-## Configuration (env vars)
+Submit a job:
 
-- `PORT` — API port, default `8789`.
-- `WHISPER_MODEL` — default model path (default `vendor/whisper.cpp/models/ggml-base.bin`).
-- `WHISPER_CPP_DIR` / `WHISPER_BIN` — custom whisper.cpp dir / `whisper-cli` path.
-- `WHISPER_USE_GPU=1` — allow GPU/Metal (default CPU; short clips are often faster on CPU).
-- `WHISPER_PROMPT` — default vocabulary/context prompt (empty = neutral). Per-request `prompt` overrides it.
-- `ALLOW_CUSTOM_MODEL_PATH=1` — let clients pass an arbitrary model path (off by default).
-- `MAX_AUDIO_BYTES` — upload limit, default 200 MB.
-- `KEEP_TRANSCRIPTS=1` — keep per-request transcript JSON in `transcripts/` (default: deleted).
+```bash
+curl -sS -X POST http://localhost:6601/api/transcribe \
+  -F audio=@/path/to/clip.mp4 \
+  -F model=large-v3-turbo \
+  -F engine=faster-whisper \
+  -F language=auto \
+  | jq .
+```
+
+Poll the returned job:
+
+```bash
+curl -sS http://localhost:6601/api/job/JOB_ID | jq .
+```
+
+## Configuration
+
+- `PORT` — API port, default `6601`.
+- `REDIS_URL` — Redis connection string, default `redis://localhost:6379/0`.
+- `STT_ENGINE` — `whisper-cpp` or `faster-whisper`, default `whisper-cpp`.
+- `WHISPER_MODEL` — default model key, default `large-v3`.
+- `HF_HOME` — faster-whisper / pyannote cache directory.
+- `WHISPER_CPP_DIR` / `WHISPER_CPP_BIN` / `WHISPER_CPP_MODEL_DIR` — whisper.cpp paths.
+- `MAX_AUDIO_BYTES` — per-upload size limit, default 200 MB.
+- `UPLOADS_MAX_BYTES` — total upload workspace cap, default 5 GB.
+- `WORKER_CONCURRENCY` — concurrent transcriptions for the elected worker leader.
+- `JOB_TTL` — Redis job lifetime, default 12 hours.
+- `ENABLE_CHUNK_TRANSCRIPTION` — set `0` to disable chunked transcription.
+- `CHUNK_SECONDS` / `CHUNK_OVERLAP_SECONDS` — chunk sizing for long audio.
+- `ENABLE_DIARIZATION` — server-wide speaker diarization switch.
+- `STT_CORS_ORIGINS` — comma-separated allowed browser origins. Defaults to localhost origins.
+- `STT_RATE_LIMIT_PER_MINUTE` — per-IP submit limit, default `20`; set `0` to disable.
+- `STT_API_KEY` — optional API key. When set, `/api/transcribe` and `/api/job/{id}` require
+  `X-STT-API-Key: ...` or `Authorization: Bearer ...`. The bundled browser UI sends
+  `localStorage["stt-api-key"]` as `X-STT-API-Key` when that value is present.
 
 ## Models
 
-Registry keys: `tiny`, `base`, `small`, `large-v3`, `large-v3-turbo`. Only installed models are
-selectable in the UI. `base` is a good default. `large-v3` is the highest-quality option,
-while `large-v3-turbo` is a better speed/quality tradeoff.
+Registry keys: `tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo`.
 
-## Benchmark (base vs. small vs. large-v3-turbo)
+Only installed models are accepted for the selected engine. Docker pre-warms the configured
+faster-whisper model at container startup. Native whisper.cpp models live under
+`backend/vendor/whisper.cpp/models/` as `ggml-*.bin`.
 
-Measured on this machine (Apple Silicon Mac) with whisper.cpp's bundled
-`samples/jfk.wav` (~11s clean English), via `npm run bench`. `real` is wall time;
-**×realtime** = audio seconds ÷ processing seconds (higher is faster).
+## Privacy And Security
 
-| Model | Size | CPU (`-ng`) | Metal (`WHISPER_USE_GPU=1`) | ×realtime (Metal) | Accuracy on this clip |
-|---|---:|---:|---:|---:|---|
-| base | 141 MB | 0.54s | 0.56s | ~20× | correct, missed a comma |
-| small | 465 MB | 1.56s | 1.07s | ~10× | correct, good punctuation |
-| large-v3 | 2.6 GB | 5.8s | 2.73s | ~4× | best quality |
-| large-v3-turbo | 1.5 GB | 4.10s | 2.09s | ~5× | correct, best punctuation |
+Audio files are cleaned after job completion. CORS is no longer open by default; configure
+`STT_CORS_ORIGINS` explicitly before exposing this service to browsers on other domains.
 
-Takeaways:
-- All three are **far faster than real time** even on CPU — the backend's edge is native speed.
-- **Metal** helps the larger models most (turbo ~2× faster); on tiny clips `base` sees little
-  gain because Metal setup overhead dominates.
-- On clean English the gap is smaller, and `large-v3` is typically best for raw quality,
-  with `large-v3-turbo` usually winning for practical throughput and accuracy balance.
-
-Reproduce with another file: `npm run bench -- /path/to/clip.wav` (or set `MODELS=...`,
-`LANGUAGE=...`, `WHISPER_USE_GPU=1`).
-
-## Privacy
-
-The uploaded source and the intermediate 16 kHz wav are **always deleted** after each
-request (success or failure). Transcript JSON is also deleted unless `KEEP_TRANSCRIPTS=1`.
-CORS is `*` so a `file://` browser page can call the API — tighten this before exposing
-beyond localhost.
+For public deployments, set `STT_API_KEY`, keep rate limiting enabled, and put the service
+behind your normal reverse-proxy limits.
 
 ## License
 
-MIT (this server). It wraps **whisper.cpp** (MIT) and **OpenAI Whisper** weights (MIT).
-**ffmpeg** is a separate system dependency (LGPL/GPL) — it is *required at runtime* but not
-bundled or redistributed here; review its license if you ship ffmpeg binaries yourself.
+MIT. This backend wraps whisper.cpp / faster-whisper and uses ffmpeg as a system dependency.
