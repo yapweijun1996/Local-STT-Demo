@@ -860,11 +860,13 @@ function updateModelInfo() {
 function applyEngine() {
   const eng = effectiveEngine();
   const map = activeInstalledMap();
+  const isFw = eng === "faster-whisper";
   [...ui.model.options].forEach(o => {
     const ok = !!map[o.value];
-    o.disabled = !ok;
-    o.textContent = o.textContent.replace(/ \(not installed\)$/, "");
-    if (!ok) o.textContent += " (not installed)";
+    // faster-whisper can auto-download missing models — keep them selectable.
+    o.disabled = isFw ? false : !ok;
+    o.textContent = o.textContent.replace(/ \(not installed\)$| \(auto-download\)$/, "");
+    if (!ok) o.textContent += isFw ? " (auto-download)" : " (not installed)";
   });
   // If the current pick isn't available on this engine, jump to the first that is.
   if (ui.model.selectedOptions[0]?.disabled) {
