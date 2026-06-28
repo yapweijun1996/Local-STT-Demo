@@ -23,6 +23,7 @@ COPY . .
 
 ENV PORT=6601 \
     WHISPER_MODEL=large-v3-turbo \
+    STT_ENGINE=faster-whisper \
     HF_HOME=/app/backend/vendor/models
 
 EXPOSE 6601

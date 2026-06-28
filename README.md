@@ -45,7 +45,7 @@ call — those always go to the network, so transcription is unaffected by cachi
 A workflow at [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) publishes this
 browser demo to GitHub Pages on every push to `main`. One-time setup: **Settings → Pages →
 Build and deployment → Source = "GitHub Actions"**. After it runs, the demo is live (and
-installable) at `https://yapweijun1996.github.io/Local-STT-Demo/`. The Node backend is not
+installable) at `https://yapweijun1996.github.io/Local-STT-Demo/`. The Python backend is not
 deployed there — it needs a server; run it locally (see [`backend/`](backend/)).
 
 ## Quick start
@@ -60,23 +60,23 @@ deployed there — it needs a server; run it locally (see [`backend/`](backend/)
 
 ## Optional backend STT service
 
-For API-based use (ERP/agent pipelines, larger files, server-side control), use the bundled Node backend in [`backend/`](backend/).
+For API-based use (ERP/agent pipelines, larger files, server-side control), use the bundled Python/FastAPI backend in [`backend/`](backend/).
 
 ```bash
-cd backend
-npm install
-npm run setup          # builds whisper.cpp + downloads base/small models by default
-npm start              # serves http://localhost:8789
+docker compose up --build
+# serves http://localhost:6601
 ```
 
-That backend exposes `/health` and `POST /api/transcribe` and accepts `base`, `small`, `tiny`,
-`large-v3-turbo`, or `large-v3` (if those model files are installed) as model aliases.
+That backend exposes `/health`, `POST /api/transcribe`, and `GET /api/job/{jobId}`.
+It accepts `tiny`, `base`, `small`, `medium`, `large-v3-turbo`, or `large-v3` when the
+chosen engine has that model installed.
 
 ## Pushing to GitHub (important)
 
-- **Do not commit model binaries.** `backend` uses `.gitignore` to keep `vendor/`, `models/`,
-  `uploads/`, and `transcripts/` local-only.  
-- Use `npm run setup` on each machine/environment (or CI job) to fetch models locally.  
+- **Do not commit model binaries.** `backend` uses `.gitignore` to keep model caches,
+  `uploads/`, and `transcripts/` local-only.
+- `backend/public/vendor/webm-muxer.min.js` is a small frontend runtime file and is intentionally tracked.
+- Use Docker model volumes or `backend/scripts/setup-whisper-cpp.sh` on each machine/environment to fetch models locally.
 - Your current setup has already downloaded large models locally; they are ignored by git and will not
   be pushed.
 - If you must version model artifacts in this repo (not recommended for this size), use Git LFS and
@@ -133,10 +133,10 @@ than real time. (Numbers exclude the one-time model download; turbo is ~1.5GB on
 
 ## Two flavors in this repo
 
-| | Browser demo (this `index.html`) | Node backend ([`backend/`](backend/)) |
+| | Browser demo (this `index.html`) | Python backend ([`backend/`](backend/)) |
 |---|---|---|
-| Install | none — double-click | Node + ffmpeg + compile whisper.cpp |
-| Engine | Transformers.js (ONNX, WebGPU/WASM) | whisper.cpp (native, Metal/CPU) |
+| Install | none — double-click | Python + Redis + ffmpeg; Docker supported |
+| Engine | Transformers.js (ONNX, WebGPU/WASM) | faster-whisper or whisper.cpp (native, Metal/CPU) |
 | Best for | "double-click and it works" demo, full privacy | native speed, long files, ERP/agent integration |
 | Dependency tree | MIT-clean, no ffmpeg | MIT code; ffmpeg required at runtime |
 
