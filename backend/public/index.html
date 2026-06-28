@@ -550,7 +550,10 @@
           <div class="card-body">
             <div class="status-line">
               <div id="status">Ready. Upload a file or record, then transcribe.</div>
-              <div id="statusValue">0%</div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div id="statusValue">0%</div>
+                <button id="cancelBtn" class="btn btn-ghost btn-sm hidden" type="button">✕ Cancel</button>
+              </div>
             </div>
             <div class="bar"><i id="prog"></i></div>
             <div id="progStats" class="prog-stats"></div>
@@ -770,6 +773,7 @@ const ui = {
   micPlayback: $("micPlayback"),
   status: $("status"), statusValue: $("statusValue"), prog: $("prog"), stat: $("stat"), progStats: $("progStats"),
   modelInfo: $("modelInfo"),
+  cancelBtn: $("cancelBtn"),
   out: $("out"), segs: $("segs"), dlTxt: $("dlTxt"), dlSrt: $("dlSrt"), copyBtn: $("copyBtn"), newSpeechBtn: $("newSpeechBtn"),
   transcriptCard: $("transcriptCard"),
   health: $("health"), themeToggle: $("themeToggle"), installBtn: $("installBtn"),
@@ -1002,6 +1006,15 @@ function clearActiveJob(jobId = null) {
     if (active.jobId === jobId) localStorage.removeItem(ACTIVE_JOB_KEY);
   } catch { localStorage.removeItem(ACTIVE_JOB_KEY); }
 }
+
+let _activeJobId = null;
+function showCancelBtn(jobId) { _activeJobId = jobId; ui.cancelBtn.classList.remove("hidden"); ui.cancelBtn.disabled = false; }
+function hideCancelBtn() { _activeJobId = null; ui.cancelBtn.classList.add("hidden"); }
+ui.cancelBtn.addEventListener("click", async () => {
+  if (!_activeJobId) return;
+  ui.cancelBtn.disabled = true;
+  try { await fetch(`/api/job/${_activeJobId}`, { method: "DELETE", headers: apiHeaders() }); } catch {}
+});
 function getActiveJob() {
   try {
     const active = JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY) || "{}");
@@ -1385,10 +1398,16 @@ async function transcribe() {
     }
   } catch (e) {
     ui.newSpeechBtn.classList.remove("hidden");
-    setStatus("Failed: " + (e.message || e), true);
+    if (e.message === "Cancelled") {
+      setStatus("Cancelled.", false);
+      setTranscriptState("idle");
+    } else {
+      setStatus("Failed: " + (e.message || e), true);
+    }
   }
   finally {
     transcribing = false;
+    hideCancelBtn();
     ui.go.disabled = false; ui.go.textContent = "Transcribe file";
     ui.micBtn.disabled = false;
     setBusy(false); setDownloadStats([]);
@@ -1415,6 +1434,7 @@ function postTranscribe(fd, onUp) {
         return resolve(body);
       }
       saveActiveJob(body.jobId);
+      showCancelBtn(body.jobId);
       try { resolve(await _pollJob(body.jobId)); }
       catch (e) { reject(e); }
     };
@@ -1470,6 +1490,10 @@ async function _pollJob(jobId, maxMs = 12 * 60 * 60 * 1000) {
       continue;
     }
     if (r.ok && data.status === "pending") continue;
+    if (r.ok && data.status === "cancelled") {
+      clearActiveJob(jobId);
+      throw new Error("Cancelled");
+    }
     if (!r.ok) clearActiveJob(jobId);
     throw new Error(data.error || `HTTP ${r.status}`);
   }

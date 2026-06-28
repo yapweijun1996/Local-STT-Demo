@@ -479,7 +479,9 @@ async def _worker_loop(worker_id: int) -> None:
             result = await asyncio.to_thread(_do_transcription, job_id)
             _job_update(job_id, {"status": "done", "result": result})
         except Exception as exc:
-            _job_update(job_id, {"status": "error", "error": str(exc)})
+            latest = _job_get(job_id)
+            if not (latest and latest.get("status") == "cancelled"):
+                _job_update(job_id, {"status": "error", "error": str(exc)})
         finally:
             latest = _job_get(job_id)
             _redis.srem(RUNNING_SET, job_id)
@@ -756,6 +758,33 @@ async def get_job(job_id: str, request: Request):
     }
 
 
+# ── Cancel job ────────────────────────────────────────────────────────
+@app.delete("/api/job/{job_id}")
+async def cancel_job(job_id: str, request: Request):
+    auth_error = _authorize_request(request)
+    if auth_error is not None:
+        return auth_error
+
+    redis_error = _require_redis_response()
+    if redis_error is not None:
+        return redis_error
+
+    job = _job_get(job_id)
+    if job is None:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+
+    status = job.get("status")
+    if status in ("done", "error", "cancelled"):
+        return JSONResponse({"error": f"Job already {status}"}, status_code=409)
+
+    if _redis is not None:
+        _redis.lrem(PENDING_QUEUE, 0, job_id)
+        _redis.srem(RUNNING_SET, job_id)
+
+    _job_update(job_id, {"status": "cancelled"})
+    return {"jobId": job_id, "status": "cancelled"}
+
+
 # ── Transcription worker ───────────────────────────────────────────────
 def _probe_duration(path: str) -> float:
     result = subprocess.run(
@@ -1024,6 +1053,9 @@ def _run_chunked_transcription(job_id: str, job: dict[str, Any]) -> dict[str, An
                     # Lean copy — word arrays are kept in-memory for diarization only.
                     "partialSegments": [{k: v for k, v in s.items() if k != "words"} for s in all_segments],
                 })
+                job_check = _job_get(job_id)
+                if job_check and job_check.get("status") == "cancelled":
+                    raise RuntimeError("Job cancelled by user.")
             finally:
                 _safe_unlink(chunk_path)
     finally:
