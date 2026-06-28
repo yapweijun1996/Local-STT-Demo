@@ -635,7 +635,7 @@ async def api_transcribe(
             {"error": f"Unknown engine '{engine_name}'. Use: {', '.join(sorted(KNOWN_ENGINES))}"},
             status_code=400,
         )
-    if engine_name == "faster-whisper" and not _fw_model_installed(model_name):
+    if engine_name == "faster-whisper" and os.environ.get("HF_HUB_OFFLINE") == "1" and not _fw_model_installed(model_name):
         _safe_unlink(source_path)
         return JSONResponse(
             {
