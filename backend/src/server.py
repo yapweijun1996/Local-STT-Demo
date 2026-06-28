@@ -85,8 +85,8 @@ def _fw_model_installed(model_name: str) -> bool:
     HF_HUB_OFFLINE=1, so a missing model fails cryptically at job time. Check
     up-front instead and return a clear error.
     """
-    hf_root = os.environ.get("HF_HOME")
-    if not hf_root or model_name not in _FW_REPO:
+    hf_root = os.environ.get("HF_HOME") or str(Path.home() / ".cache" / "huggingface" / "hub")
+    if model_name not in _FW_REPO:
         return False
     org = _FW_REPO[model_name]
     snapshots = Path(hf_root) / f"models--{org}--faster-whisper-{model_name}" / "snapshots"
