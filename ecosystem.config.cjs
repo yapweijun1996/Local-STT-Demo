@@ -10,6 +10,8 @@ module.exports = {
       interpreter: "none",
       env: {
         PORT: "6601",
+        MAX_AUDIO_BYTES: String(500 * 1024 * 1024),
+        UPLOAD_CHUNK_BYTES: String(80 * 1024 * 1024),
         WHISPER_MODEL: "large-v3",
         STT_ENGINE: "whisper-cpp",
         HF_HOME: "/Users/yapweijun/.cache/stt-models",

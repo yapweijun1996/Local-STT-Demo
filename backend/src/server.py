@@ -47,7 +47,8 @@ TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
 PORT = int(os.environ.get("PORT", "6601"))
 DEFAULT_MODEL = os.environ.get("WHISPER_MODEL", "large-v3")
 DEFAULT_ENGINE = os.environ.get("STT_ENGINE", "whisper-cpp")
-MAX_AUDIO_BYTES = int(os.environ.get("MAX_AUDIO_BYTES", str(200 * 1024 * 1024)))
+DEFAULT_MAX_AUDIO_BYTES = 500 * 1024 * 1024
+MAX_AUDIO_BYTES = int(os.environ.get("MAX_AUDIO_BYTES", str(DEFAULT_MAX_AUDIO_BYTES)))
 TRANSCRIPTION_TIMEOUT = int(os.environ.get("TRANSCRIPTION_TIMEOUT", "0"))
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 JOB_TTL = int(os.environ.get("JOB_TTL", str(12 * 60 * 60)))
@@ -57,6 +58,14 @@ QUEUE_POP_TIMEOUT = int(os.environ.get("QUEUE_POP_TIMEOUT", "5"))
 CLEANUP_INTERVAL_SECONDS = int(os.environ.get("CLEANUP_INTERVAL_SECONDS", str(30 * 60)))
 ORPHAN_MAX_AGE_SECONDS = int(os.environ.get("ORPHAN_MAX_AGE_SECONDS", str(24 * 60 * 60)))
 UPLOADS_MAX_BYTES = int(os.environ.get("UPLOADS_MAX_BYTES", str(5 * 1024 * 1024 * 1024)))
+UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+# Cloudflare's common 100 MB edge request limit applies to each HTTP request,
+# not to the logical file. Keep raw chunks below it with room for framing.
+UPLOAD_CHUNK_BYTES = max(
+    1 * 1024 * 1024,
+    int(os.environ.get("UPLOAD_CHUNK_BYTES", str(80 * 1024 * 1024))),
+)
+UPLOAD_SESSION_TTL = max(60, int(os.environ.get("UPLOAD_SESSION_TTL", str(2 * 60 * 60))))
 ENABLE_CHUNK_TRANSCRIPTION = os.environ.get("ENABLE_CHUNK_TRANSCRIPTION", "1") != "0"
 CHUNK_SECONDS = max(1, int(os.environ.get("CHUNK_SECONDS", "180")))
 CHUNK_OVERLAP_SECONDS = max(0, int(os.environ.get("CHUNK_OVERLAP_SECONDS", "5")))
@@ -68,6 +77,10 @@ CORS_ORIGINS = [
 ]
 API_KEY = os.environ.get("STT_API_KEY", "").strip()
 RATE_LIMIT_PER_MINUTE = max(0, int(os.environ.get("STT_RATE_LIMIT_PER_MINUTE", "20")))
+UPLOAD_SESSION_PREFIX = "stt:upload:"
+UPLOAD_ACTIVE_SET = "stt:uploads:active"
+UPLOAD_LOCK_PREFIX = "stt:upload-lock:"
+UPLOAD_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 # Speaker diarization (pyannote). Off by default per-request; this env is the
 # server-wide kill switch. Requires pyannote.audio + HF_TOKEN (see diarize.py).
 ENABLE_DIARIZATION = os.environ.get("ENABLE_DIARIZATION", "1") != "0"
@@ -76,6 +89,19 @@ MODEL_REGISTRY = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo
 KNOWN_ENGINES = {"whisper-cpp", "faster-whisper"}
 _FW_REPO = {k: "Systran" for k in MODEL_REGISTRY}
 _FW_REPO["large-v3-turbo"] = "mobiuslabsgmbh"
+
+
+def _format_bytes(value: int) -> str:
+    units = ("B", "KB", "MB", "GB")
+    size = float(value)
+    unit = 0
+    while size >= 1024 and unit < len(units) - 1:
+        size /= 1024
+        unit += 1
+    return f"{size:g} {units[unit]}"
+
+
+MAX_AUDIO_LABEL = _format_bytes(MAX_AUDIO_BYTES)
 
 
 def _fw_model_installed(model_name: str) -> bool:
@@ -119,7 +145,7 @@ app = FastAPI(title="Local STT", version="0.6.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_methods=["POST", "PUT", "DELETE", "GET", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-STT-API-Key"],
 )
 
@@ -153,6 +179,43 @@ def _init_redis() -> None:
 
 def _job_key(job_id: str) -> str:
     return f"{JOB_PREFIX}{job_id}"
+
+
+def _upload_key(upload_id: str) -> str:
+    return f"{UPLOAD_SESSION_PREFIX}{upload_id}"
+
+
+def _upload_lock_key(upload_id: str) -> str:
+    return f"{UPLOAD_LOCK_PREFIX}{upload_id}"
+
+
+def _upload_dir(upload_id: str) -> Path:
+    return UPLOAD_DIR / f".stt-upload-{upload_id}"
+
+
+def _valid_upload_id(upload_id: str) -> bool:
+    return bool(UPLOAD_ID_RE.fullmatch(upload_id))
+
+
+def _upload_session_get(upload_id: str) -> dict[str, Any] | None:
+    if _redis is None or not _valid_upload_id(upload_id):
+        return None
+    raw = _redis.get(_upload_key(upload_id))
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _upload_session_set(meta: dict[str, Any]) -> None:
+    if _redis is None:
+        raise RuntimeError("Redis unavailable")
+    upload_id = str(meta["uploadId"])
+    _redis.setex(_upload_key(upload_id), UPLOAD_SESSION_TTL, json.dumps(meta))
+    _redis.sadd(UPLOAD_ACTIVE_SET, upload_id)
+    _redis.expire(UPLOAD_ACTIVE_SET, UPLOAD_SESSION_TTL)
 
 
 def _require_redis_response():
@@ -258,7 +321,7 @@ def _enqueue_job(job_id: str, *, status: str = "queued") -> None:
 
 def _uploads_bytes() -> int:
     total = 0
-    for p in UPLOAD_DIR.iterdir():
+    for p in UPLOAD_DIR.rglob("*"):
         if p.is_file() and p.name != ".gitkeep":
             try:
                 total += p.stat().st_size
@@ -280,6 +343,15 @@ def _active_upload_paths() -> set[Path]:
             path = job.get(key)
             if path:
                 active.add(Path(path).resolve())
+    for upload_id in list(_redis.smembers(UPLOAD_ACTIVE_SET)):
+        upload_id = str(upload_id)
+        meta = _upload_session_get(upload_id)
+        if not meta:
+            _redis.srem(UPLOAD_ACTIVE_SET, upload_id)
+            continue
+        upload_dir = meta.get("uploadDir")
+        if upload_dir:
+            active.add(Path(upload_dir).resolve())
     return active
 
 
@@ -294,7 +366,8 @@ def _cleanup_orphan_uploads(*, force: bool = False) -> dict[str, int]:
             continue
         try:
             stat = path.stat()
-            is_active = path.resolve() in active
+            resolved = path.resolve()
+            is_active = resolved in active or any(parent in active for parent in resolved.parents)
             is_old = (now - stat.st_mtime) > ORPHAN_MAX_AGE_SECONDS
             if is_active or (not force and not is_old):
                 continue
@@ -320,11 +393,81 @@ def _safe_unlink(p: Path) -> None:
         pass
 
 
+async def _save_upload(upload: UploadFile, destination: Path) -> tuple[int, bool]:
+    """Stream an upload to disk and enforce the per-file limit.
+
+    Reading in chunks keeps a 500 MB upload from being materialized as one
+    large bytes object. The partial file is removed when the limit is crossed.
+    """
+    total = 0
+    accepted = True
+    try:
+        with destination.open("wb") as target:
+            while True:
+                chunk = await upload.read(UPLOAD_READ_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_AUDIO_BYTES:
+                    accepted = False
+                    break
+                target.write(chunk)
+    except Exception:
+        _safe_unlink(destination)
+        raise
+    finally:
+        await upload.close()
+
+    if not accepted:
+        _safe_unlink(destination)
+    return total, accepted
+
+
+async def _save_request_body(
+    request: Request,
+    destination: Path,
+    *,
+    max_bytes: int,
+    expected_bytes: int | None = None,
+) -> tuple[int, bool]:
+    """Stream a raw request body to disk without buffering it in memory."""
+    total = 0
+    accepted = True
+    try:
+        with destination.open("wb") as target:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_bytes:
+                    accepted = False
+                    break
+                target.write(chunk)
+    except Exception:
+        _safe_unlink(destination)
+        raise
+
+    if expected_bytes is not None and total != expected_bytes:
+        accepted = False
+    if not accepted:
+        _safe_unlink(destination)
+    return total, accepted
+
+
 def _safe_rmtree(p: Path) -> None:
     try:
         shutil.rmtree(p, ignore_errors=True)
     except Exception:
         pass
+
+
+def _upload_session_delete(upload_id: str) -> None:
+    meta = _upload_session_get(upload_id)
+    if _redis is not None and _valid_upload_id(upload_id):
+        _redis.delete(_upload_key(upload_id), _upload_lock_key(upload_id))
+        _redis.srem(UPLOAD_ACTIVE_SET, upload_id)
+    upload_dir = Path(str(meta.get("uploadDir"))) if meta and meta.get("uploadDir") else _upload_dir(upload_id)
+    _safe_rmtree(upload_dir)
 
 
 def _cleanup_job_files(job: dict[str, Any] | None) -> None:
@@ -549,6 +692,9 @@ async def health():
         "runningCount": running_count,
         "uploadsBytes": _uploads_bytes(),
         "uploadsMaxBytes": UPLOADS_MAX_BYTES,
+        "maxAudioBytes": MAX_AUDIO_BYTES,
+        "resumableUploadEnabled": True,
+        "uploadChunkBytes": UPLOAD_CHUNK_BYTES,
         "chunkTranscriptionEnabled": ENABLE_CHUNK_TRANSCRIPTION,
         "chunkSeconds": CHUNK_SECONDS,
         "chunkOverlapSeconds": CHUNK_OVERLAP_SECONDS,
@@ -562,55 +708,36 @@ async def health():
     }
 
 
-# ── Transcribe: accept upload, queue job, return immediately ───────────
-@app.post("/api/transcribe")
-async def api_transcribe(
-    request: Request,
-    audio: UploadFile = File(...),
-    model: str = Form(""),
-    language: str = Form("auto"),
-    engine: str = Form(""),
-    useGpu: str = Form("1"),
-    prompt: str = Form(""),
-    diarize: str = Form("0"),
-    speakers: str = Form(""),
-):
-    auth_error = _authorize_request(request)
-    if auth_error is not None:
-        return auth_error
+# ── Upload/job helpers ─────────────────────────────────────────────────
+def _new_job_id(started_at: float) -> str:
+    return f"{int(started_at * 1000)}-{uuid.uuid4().hex[:8]}"
 
-    redis_error = _require_redis_response()
-    if redis_error is not None:
-        return redis_error
 
-    rate_error = _rate_limit_request(request)
-    if rate_error is not None:
-        return rate_error
+def _flag_value(value: Any, default: str = "0") -> str:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    raw = str(value).strip().lower()
+    if not raw:
+        return default
+    return "1" if raw in {"1", "true", "yes", "on"} else "0"
 
-    storage_error = _enforce_upload_capacity()
-    if storage_error is not None:
-        return storage_error
 
-    started_at = time.time()
-    job_id = f"{int(started_at * 1000)}-{uuid.uuid4().hex[:8]}"
-    original_name = audio.filename or "audio"
-    source_path = UPLOAD_DIR / f"{job_id}_{original_name}"
-    wav_path = UPLOAD_DIR / f"{job_id}.wav"
-
-    try:
-        content = await audio.read()
-        if len(content) > MAX_AUDIO_BYTES:
-            return JSONResponse(
-                {"error": f"File too large (max {MAX_AUDIO_BYTES} bytes)"},
-                status_code=413,
-            )
-        source_path.write_bytes(content)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": str(exc), "originalName": original_name},
-            status_code=500,
-        )
-
+def _queue_transcription_job(
+    *,
+    job_id: str,
+    started_at: float,
+    source_path: Path,
+    original_name: str,
+    model: str,
+    language: str,
+    engine: str,
+    use_gpu: str,
+    prompt: str,
+    diarize: str,
+    speakers: str,
+) -> dict[str, Any] | JSONResponse:
     if _uploads_bytes() > UPLOADS_MAX_BYTES:
         _safe_unlink(source_path)
         return JSONResponse(
@@ -648,7 +775,7 @@ async def api_transcribe(
             status_code=400,
         )
     if engine_name == "whisper-cpp":
-        if useGpu != "1":
+        if use_gpu != "1":
             _safe_unlink(source_path)
             return JSONResponse(
                 {
@@ -667,6 +794,7 @@ async def api_transcribe(
                 status_code=400,
             )
 
+    wav_path = UPLOAD_DIR / f"{job_id}.wav"
     job = {
         "id": job_id,
         "status": "queued",
@@ -679,7 +807,7 @@ async def api_transcribe(
         "modelName": model_name,
         "language": language.strip() or "auto",
         "engineName": engine_name,
-        "useGpu": useGpu == "1",
+        "useGpu": use_gpu == "1",
         "prompt": prompt.strip() or None,
         "diarize": ENABLE_DIARIZATION and diarize == "1",
         "numSpeakers": _parse_speakers(speakers),
@@ -703,6 +831,370 @@ async def api_transcribe(
         "queuedCount": queued_count,
         "runningCount": running_count,
     }
+
+
+def _upload_expected_chunk_bytes(meta: dict[str, Any], chunk_index: int) -> int:
+    total_bytes = int(meta["totalBytes"])
+    total_chunks = int(meta["totalChunks"])
+    if chunk_index < 0 or chunk_index >= total_chunks:
+        return 0
+    start = chunk_index * UPLOAD_CHUNK_BYTES
+    return min(UPLOAD_CHUNK_BYTES, total_bytes - start)
+
+
+def _upload_chunk_path(meta: dict[str, Any], chunk_index: int) -> Path:
+    return Path(str(meta["uploadDir"])) / f"part-{chunk_index:06d}"
+
+
+def _upload_received_chunks(meta: dict[str, Any]) -> list[int]:
+    received: list[int] = []
+    for index in range(int(meta["totalChunks"])):
+        path = _upload_chunk_path(meta, index)
+        try:
+            if path.is_file() and path.stat().st_size == _upload_expected_chunk_bytes(meta, index):
+                received.append(index)
+        except OSError:
+            continue
+    return received
+
+
+def _json_text(data: dict[str, Any], key: str, default: str = "") -> str:
+    value = data.get(key, default)
+    return default if value is None else str(value)
+
+
+# ── Direct upload: accept a small request and queue it ─────────────────
+@app.post("/api/transcribe")
+async def api_transcribe(
+    request: Request,
+    audio: UploadFile = File(...),
+    model: str = Form(""),
+    language: str = Form("auto"),
+    engine: str = Form(""),
+    useGpu: str = Form("1"),
+    prompt: str = Form(""),
+    diarize: str = Form("0"),
+    speakers: str = Form(""),
+):
+    auth_error = _authorize_request(request)
+    if auth_error is not None:
+        return auth_error
+
+    redis_error = _require_redis_response()
+    if redis_error is not None:
+        return redis_error
+
+    rate_error = _rate_limit_request(request)
+    if rate_error is not None:
+        return rate_error
+
+    storage_error = _enforce_upload_capacity()
+    if storage_error is not None:
+        return storage_error
+
+    started_at = time.time()
+    job_id = _new_job_id(started_at)
+    original_name = Path(audio.filename or "audio").name or "audio"
+    source_path = UPLOAD_DIR / f"{job_id}_{original_name}"
+
+    try:
+        _, accepted = await _save_upload(audio, source_path)
+        if not accepted:
+            return JSONResponse(
+                {"error": f"File too large (max {MAX_AUDIO_LABEL})", "maxAudioBytes": MAX_AUDIO_BYTES},
+                status_code=413,
+            )
+    except Exception as exc:
+        return JSONResponse(
+            {"error": str(exc), "originalName": original_name},
+            status_code=500,
+        )
+
+    return _queue_transcription_job(
+        job_id=job_id,
+        started_at=started_at,
+        source_path=source_path,
+        original_name=original_name,
+        model=model,
+        language=language,
+        engine=engine,
+        use_gpu=_flag_value(useGpu, "1"),
+        prompt=prompt,
+        diarize=_flag_value(diarize),
+        speakers=speakers,
+    )
+
+
+# ── Resumable upload: small raw requests, one logical STT job ───────────
+@app.post("/api/upload/init")
+async def init_upload(request: Request):
+    auth_error = _authorize_request(request)
+    if auth_error is not None:
+        return auth_error
+    redis_error = _require_redis_response()
+    if redis_error is not None:
+        return redis_error
+    rate_error = _rate_limit_request(request)
+    if rate_error is not None:
+        return rate_error
+    storage_error = _enforce_upload_capacity()
+    if storage_error is not None:
+        return storage_error
+
+    try:
+        data = await request.json()
+        size = int(data.get("size", 0))
+        requested_chunks = int(data.get("totalChunks", 0))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return JSONResponse({"error": "Invalid upload metadata."}, status_code=400)
+
+    if size <= 0:
+        return JSONResponse({"error": "Upload size must be greater than zero."}, status_code=400)
+    if size > MAX_AUDIO_BYTES:
+        return JSONResponse(
+            {"error": f"File too large (max {MAX_AUDIO_LABEL})", "maxAudioBytes": MAX_AUDIO_BYTES},
+            status_code=413,
+        )
+    total_chunks = (size + UPLOAD_CHUNK_BYTES - 1) // UPLOAD_CHUNK_BYTES
+    if requested_chunks and requested_chunks != total_chunks:
+        return JSONResponse(
+            {"error": "totalChunks does not match the configured chunk size.", "totalChunks": total_chunks},
+            status_code=400,
+        )
+    if _uploads_bytes() + size > UPLOADS_MAX_BYTES:
+        return JSONResponse(
+            {
+                "error": "Upload storage limit would be exceeded. Try again after current jobs finish.",
+                "uploadsBytes": _uploads_bytes(),
+                "uploadsMaxBytes": UPLOADS_MAX_BYTES,
+            },
+            status_code=507,
+        )
+
+    upload_id = uuid.uuid4().hex
+    upload_dir = _upload_dir(upload_id)
+    upload_dir.mkdir(parents=True, exist_ok=False)
+    original_name = Path(str(data.get("filename") or "audio")).name or "audio"
+    meta = {
+        "uploadId": upload_id,
+        "uploadDir": str(upload_dir),
+        "originalName": original_name[:255],
+        "contentType": str(data.get("contentType") or "application/octet-stream")[:200],
+        "totalBytes": size,
+        "totalChunks": total_chunks,
+        "createdAt": time.time(),
+        "status": "uploading",
+    }
+    try:
+        _upload_session_set(meta)
+    except Exception:
+        _safe_rmtree(upload_dir)
+        raise
+    return {
+        "uploadId": upload_id,
+        "chunkSize": UPLOAD_CHUNK_BYTES,
+        "totalChunks": total_chunks,
+        "maxAudioBytes": MAX_AUDIO_BYTES,
+    }
+
+
+@app.put("/api/upload/{upload_id}/chunk/{chunk_index}")
+async def put_upload_chunk(upload_id: str, chunk_index: int, request: Request):
+    auth_error = _authorize_request(request)
+    if auth_error is not None:
+        return auth_error
+    redis_error = _require_redis_response()
+    if redis_error is not None:
+        return redis_error
+    meta = _upload_session_get(upload_id)
+    if meta is None:
+        return JSONResponse({"error": "Upload session not found or expired."}, status_code=404)
+    if meta.get("status") != "uploading":
+        return JSONResponse({"error": "Upload session is no longer accepting chunks."}, status_code=409)
+
+    expected_bytes = _upload_expected_chunk_bytes(meta, chunk_index)
+    if expected_bytes <= 0:
+        return JSONResponse({"error": "Invalid chunk index."}, status_code=400)
+    raw_length = request.headers.get("content-length")
+    if raw_length:
+        try:
+            if int(raw_length) > expected_bytes:
+                return JSONResponse(
+                    {"error": "Chunk is larger than the configured per-request limit.", "chunkSize": UPLOAD_CHUNK_BYTES},
+                    status_code=413,
+                )
+        except ValueError:
+            return JSONResponse({"error": "Invalid Content-Length."}, status_code=400)
+
+    chunk_path = _upload_chunk_path(meta, chunk_index)
+    existing_bytes = 0
+    try:
+        existing_bytes = chunk_path.stat().st_size if chunk_path.is_file() else 0
+    except OSError:
+        pass
+    if existing_bytes == expected_bytes:
+        return {
+            "uploadId": upload_id,
+            "chunkIndex": chunk_index,
+            "received": True,
+            "alreadyReceived": True,
+            "uploadedBytes": sum(
+                _upload_expected_chunk_bytes(meta, index) for index in _upload_received_chunks(meta)
+            ),
+            "totalBytes": int(meta["totalBytes"]),
+        }
+    if _uploads_bytes() - existing_bytes + expected_bytes > UPLOADS_MAX_BYTES:
+        return JSONResponse(
+            {
+                "error": "Upload storage limit would be exceeded. Try again after current jobs finish.",
+                "uploadsBytes": _uploads_bytes(),
+                "uploadsMaxBytes": UPLOADS_MAX_BYTES,
+            },
+            status_code=507,
+        )
+
+    Path(str(meta["uploadDir"])).mkdir(parents=True, exist_ok=True)
+    try:
+        received_bytes, accepted = await _save_request_body(
+            request,
+            chunk_path,
+            max_bytes=expected_bytes,
+            expected_bytes=expected_bytes,
+        )
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    if not accepted:
+        return JSONResponse(
+            {
+                "error": "Chunk body size does not match the expected chunk size.",
+                "chunkIndex": chunk_index,
+                "expectedBytes": expected_bytes,
+                "receivedBytes": received_bytes,
+            },
+            status_code=400,
+        )
+    received = _upload_received_chunks(meta)
+    return {
+        "uploadId": upload_id,
+        "chunkIndex": chunk_index,
+        "received": True,
+        "alreadyReceived": False,
+        "receivedChunks": len(received),
+        "totalChunks": int(meta["totalChunks"]),
+        "uploadedBytes": sum(_upload_expected_chunk_bytes(meta, index) for index in received),
+        "totalBytes": int(meta["totalBytes"]),
+    }
+
+
+@app.post("/api/upload/{upload_id}/complete")
+async def complete_upload(upload_id: str, request: Request):
+    auth_error = _authorize_request(request)
+    if auth_error is not None:
+        return auth_error
+    redis_error = _require_redis_response()
+    if redis_error is not None:
+        return redis_error
+    rate_error = _rate_limit_request(request)
+    if rate_error is not None:
+        return rate_error
+    if not _valid_upload_id(upload_id):
+        return JSONResponse({"error": "Invalid upload ID."}, status_code=400)
+    lock_acquired = bool(_redis.set(_upload_lock_key(upload_id), _leader_token, nx=True, ex=UPLOAD_SESSION_TTL))
+    if not lock_acquired:
+        return JSONResponse({"error": "Upload is already being finalized."}, status_code=409)
+
+    source_path: Path | None = None
+    try:
+        meta = _upload_session_get(upload_id)
+        if meta is None:
+            return JSONResponse({"error": "Upload session not found or expired."}, status_code=404)
+        received = _upload_received_chunks(meta)
+        missing = [index for index in range(int(meta["totalChunks"])) if index not in set(received)]
+        if missing:
+            return JSONResponse(
+                {
+                    "error": "Upload is incomplete.",
+                    "missingChunks": missing[:100],
+                    "missingCount": len(missing),
+                    "totalChunks": int(meta["totalChunks"]),
+                },
+                status_code=409,
+            )
+        total_bytes = int(meta["totalBytes"])
+        if _uploads_bytes() + total_bytes > UPLOADS_MAX_BYTES:
+            return JSONResponse(
+                {
+                    "error": "Upload storage limit would be exceeded while assembling the file.",
+                    "uploadsBytes": _uploads_bytes(),
+                    "uploadsMaxBytes": UPLOADS_MAX_BYTES,
+                },
+                status_code=507,
+            )
+        try:
+            settings = await request.json()
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return JSONResponse({"error": "Invalid transcription settings."}, status_code=400)
+        if not isinstance(settings, dict):
+            return JSONResponse({"error": "Invalid transcription settings."}, status_code=400)
+
+        started_at = time.time()
+        job_id = _new_job_id(started_at)
+        original_name = str(meta.get("originalName") or "audio")
+        source_path = UPLOAD_DIR / f"{job_id}_{original_name}"
+        try:
+            with source_path.open("wb") as target:
+                for index in range(int(meta["totalChunks"])):
+                    chunk_path = _upload_chunk_path(meta, index)
+                    with chunk_path.open("rb") as part:
+                        shutil.copyfileobj(part, target, UPLOAD_READ_CHUNK_BYTES)
+            if source_path.stat().st_size != total_bytes:
+                _safe_unlink(source_path)
+                return JSONResponse({"error": "Assembled upload size does not match metadata."}, status_code=400)
+        except Exception as exc:
+            _safe_unlink(source_path)
+            return JSONResponse({"error": f"Could not assemble upload: {exc}"}, status_code=500)
+
+        result = _queue_transcription_job(
+            job_id=job_id,
+            started_at=started_at,
+            source_path=source_path,
+            original_name=original_name,
+            model=_json_text(settings, "model"),
+            language=_json_text(settings, "language", "auto"),
+            engine=_json_text(settings, "engine"),
+            use_gpu=_flag_value(settings.get("useGpu"), "1"),
+            prompt=_json_text(settings, "prompt"),
+            diarize=_flag_value(settings.get("diarize")),
+            speakers=_json_text(settings, "speakers"),
+        )
+        if isinstance(result, JSONResponse):
+            return result
+        _upload_session_delete(upload_id)
+        result["uploadId"] = upload_id
+        return result
+    finally:
+        if source_path is not None and source_path.exists():
+            # A successfully queued job owns the source file. On every other
+            # path, avoid leaving a second copy beside the upload chunks.
+            if _upload_session_get(upload_id) is not None:
+                _safe_unlink(source_path)
+        _redis.delete(_upload_lock_key(upload_id))
+
+
+@app.delete("/api/upload/{upload_id}")
+async def cancel_upload(upload_id: str, request: Request):
+    auth_error = _authorize_request(request)
+    if auth_error is not None:
+        return auth_error
+    redis_error = _require_redis_response()
+    if redis_error is not None:
+        return redis_error
+    if not _valid_upload_id(upload_id):
+        return JSONResponse({"error": "Invalid upload ID."}, status_code=400)
+    if _upload_session_get(upload_id) is None:
+        return JSONResponse({"error": "Upload session not found or expired."}, status_code=404)
+    _upload_session_delete(upload_id)
+    return {"uploadId": upload_id, "status": "cancelled"}
 
 
 # ── Job status poll endpoint ───────────────────────────────────────────

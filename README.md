@@ -67,9 +67,20 @@ docker compose up --build
 # serves http://localhost:6601
 ```
 
-That backend exposes `/health`, `POST /api/transcribe`, and `GET /api/job/{jobId}`.
+That backend exposes `/health`, `POST /api/transcribe`, the resumable upload endpoints
+under `/api/upload/`, and `GET /api/job/{jobId}`.
 It accepts `tiny`, `base`, `small`, `medium`, `large-v3-turbo`, or `large-v3` when the
 chosen engine has that model installed.
+MP3 uploads are supported; one uploaded file may be up to 500 MB, with a separate 5 GB
+total upload-workspace cap. When served through Cloudflare Tunnel, the UI automatically
+splits large files into raw chunks (default 80 MiB per request), reassembles them on the
+server, and creates one transcription job, so the logical file can remain 500 MB without
+sending a 500 MB request through Cloudflare.
+For non-browser integrations, use the bundled stdlib client:
+
+```bash
+python backend/scripts/stt_upload.py --file /path/to/recording.mp3
+```
 
 ## Pushing to GitHub (important)
 

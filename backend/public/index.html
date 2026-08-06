@@ -426,7 +426,7 @@
           <div class="kpi"><div class="kpi-label">Server</div><div class="kpi-value" id="kpiServer">…</div><div class="kpi-sub" id="kpiServerSub">checking /health</div></div>
           <div class="kpi"><div class="kpi-label">Engine</div><div class="kpi-value" id="kpiEngine">…</div><div class="kpi-sub" id="kpiEngineSub">—</div></div>
           <div class="kpi"><div class="kpi-label">Default model</div><div class="kpi-value" id="kpiModel">…</div><div class="kpi-sub" id="kpiModelSub">—</div></div>
-          <div class="kpi"><div class="kpi-label">Max upload</div><div class="kpi-value">200 MB</div><div class="kpi-sub">auto-compress &gt; 5 MB</div></div>
+          <div class="kpi"><div class="kpi-label">Max upload</div><div class="kpi-value" data-max-upload>500 MB</div><div class="kpi-sub">auto-compress &gt; 5 MB</div></div>
         </div>
 
         <!-- Settings (advanced mode only) -->
@@ -522,9 +522,9 @@
             <div class="card-body">
               <div id="drop">
                 <p><b>Drop a file</b> or click to choose</p>
-                <p class="muted">mp4 / mp3 / wav / m4a / ogg · max 200 MB</p>
-                <p class="muted" id="fileinfo">no file selected (max 200 MB)</p>
-                <input id="file" type="file" accept="audio/*,video/mp4,video/*" class="hidden" />
+                <p class="muted">mp4 / mp3 / wav / m4a / ogg · max <span data-max-upload>500 MB</span></p>
+                <p class="muted" id="fileinfo">no file selected (max 500 MB)</p>
+                <input id="file" type="file" accept=".mp3,audio/mpeg,audio/*,video/mp4,video/*" class="hidden" />
               </div>
               <div class="mt-16" style="margin-top:auto;padding-top:16px">
                 <button id="go" class="btn btn-primary btn-lg" disabled>Transcribe file</button>
@@ -635,6 +635,7 @@ print(r.json())</pre></div>
   "ok": true,
   "defaultModel": "large-v3",
   "defaultEngine": "whisper-cpp",
+  "maxAudioBytes": 524288000,
   "engines": {
     "whisper-cpp":    { "available": true,  "gpu": "Metal (Apple Silicon)", "installed": { "large-v3": true } },
     "faster-whisper": { "available": false, "gpu": "CUDA only (CPU on Mac)", "installed": { "large-v3": false } }
@@ -652,12 +653,12 @@ print(r.json())</pre></div>
                 <span class="muted" style="font-size:12px">Transcribe audio file → text</span>
               </div>
 
-              <p class="muted" style="margin:0 0 10px">Content-Type: <code class="inline-code">multipart/form-data</code></p>
+              <p class="muted" style="margin:0 0 10px">Content-Type: <code class="inline-code">multipart/form-data</code> · best for files below the Cloudflare edge request limit</p>
 
               <table class="param-table">
                 <thead><tr><th>Field</th><th>Type</th><th></th><th>Description</th></tr></thead>
                 <tbody>
-                  <tr><td><code>audio</code></td><td>file</td><td><span class="req">required</span></td><td>Audio file — mp4 / mp3 / wav / m4a / ogg, max 200 MB</td></tr>
+                  <tr><td><code>audio</code></td><td>file</td><td><span class="req">required</span></td><td>Audio file — mp4 / mp3 / wav / m4a / ogg; logical server limit <span data-max-upload>500 MB</span></td></tr>
                   <tr><td><code>model</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>large-v3</code> (default) · <code>large-v3-turbo</code> · <code>medium</code> · <code>small</code> · <code>base</code> · <code>tiny</code></td></tr>
                   <tr><td><code>language</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>auto</code> (default) · <code>en</code> · <code>zh</code> · <code>ms</code> · <code>ja</code> · any Whisper language code</td></tr>
                   <tr><td><code>engine</code></td><td>string</td><td><span class="opt">optional</span></td><td><code>whisper-cpp</code> (default, Metal GPU) · <code>faster-whisper</code> (CPU, code-switching)</td></tr>
@@ -673,12 +674,12 @@ print(r.json())</pre></div>
                 <button class="tab-btn" data-tab="t-py">Python</button>
               </div>
               <div id="t-curl" class="tab-pane active"><pre class="code-block">curl -X POST https://stt.yapweijun1996.com/api/transcribe \
-  -F "audio=@recording.wav" \
+  -F "audio=@recording.mp3" \
   -F "model=large-v3" \
   -F "language=auto" \
   -F "engine=whisper-cpp"</pre></div>
               <div id="t-js" class="tab-pane"><pre class="code-block">const fd = new FormData();
-fd.append("audio", fileBlob, "recording.wav");
+fd.append("audio", fileBlob, "recording.mp3");
 fd.append("model", "large-v3");
 fd.append("language", "auto");
 
@@ -690,10 +691,10 @@ const res = await fetch("https://stt.yapweijun1996.com/api/transcribe", {
 	console.log(job.jobId, job.status);</pre></div>
               <div id="t-py" class="tab-pane"><pre class="code-block">import requests
 
-with open("recording.wav", "rb") as f:
+with open("recording.mp3", "rb") as f:
     r = requests.post(
         "https://stt.yapweijun1996.com/api/transcribe",
-        files={"audio": ("recording.wav", f, "audio/wav")},
+        files={"audio": ("recording.mp3", f, "audio/mpeg")},
         data={"model": "large-v3", "language": "auto"},
     )
 	print(r.json()["jobId"])</pre></div>
@@ -718,15 +719,64 @@ with open("recording.wav", "rb") as f:
   "segments": [
     { "startMs": 0, "endMs": 2120, "text": "Hello, this is a speech to text test.", "language": "en" }
   ],
-  "files": { "originalName": "recording.wav" }
+  "files": { "originalName": "recording.mp3" }
 }</pre>
 
               <p class="resp-label">Error responses</p>
               <pre class="code-block">401  { "error": "Unauthorized" }
-413  { "error": "File too large (max 209715200 bytes)" }
+413  { "error": "File too large (max 500 MB)", "maxAudioBytes": 524288000 }
 429  { "error": "Rate limit exceeded. Try again later.", "limitPerMinute": 20 }
 400  { "error": "Unknown model 'xxx'. Use: tiny, base, small, medium, large-v3, large-v3-turbo" }
-500  { "error": "&lt;exception message&gt;", "originalName": "recording.wav" }</pre>
+500  { "error": "&lt;exception message&gt;", "originalName": "recording.mp3" }</pre>
+            </div>
+
+            <hr class="api-divider" />
+
+            <!-- Resumable upload for large files -->
+            <div class="api-endpoint">
+              <div class="api-method">
+                <span class="badge post">POST</span>
+                <span class="api-path">/api/upload/…</span>
+                <span class="muted" style="font-size:12px">Cloudflare-safe upload for large files</span>
+              </div>
+              <p class="muted" style="margin:0 0 10px">
+                For files larger than one Cloudflare request, keep the user-selected file intact in your client,
+                call <code class="inline-code">init</code>, upload each raw binary slice with <code class="inline-code">PUT</code>,
+                then call <code class="inline-code">complete</code>. The default chunk size is 80 MiB and the server returns the effective value.
+              </p>
+              <pre class="code-block"># 1. Create a session
+curl -X POST https://stt.yapweijun1996.com/api/upload/init \
+  -H 'Content-Type: application/json' \
+  -d '{"filename":"recording.mp3","size":300000000,"contentType":"audio/mpeg"}'
+
+# 2. Upload every raw chunk using the returned uploadId/chunkSize
+curl -X PUT https://stt.yapweijun1996.com/api/upload/UPLOAD_ID/chunk/0 \
+  -H 'Content-Type: audio/mpeg' --data-binary @part-000000
+
+# 3. Assemble and queue one STT job
+curl -X POST https://stt.yapweijun1996.com/api/upload/UPLOAD_ID/complete \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"large-v3","engine":"whisper-cpp","language":"auto","useGpu":"1"}'</pre>
+              <p class="resp-label">JavaScript client pattern</p>
+              <pre class="code-block">const init = await fetch("/api/upload/init", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ filename: file.name, size: file.size, contentType: file.type }),
+}).then(r =&gt; r.json());
+
+for (let i = 0; i &lt; init.totalChunks; i++) {
+  const start = i * init.chunkSize;
+  const chunk = file.slice(start, Math.min(start + init.chunkSize, file.size));
+  await fetch(`/api/upload/${init.uploadId}/chunk/${i}`, {
+    method: "PUT", headers: { "Content-Type": file.type || "application/octet-stream" }, body: chunk,
+  });
+}
+
+const job = await fetch(`/api/upload/${init.uploadId}/complete`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ model: "large-v3", engine: "whisper-cpp", language: "auto", useGpu: "1" }),
+}).then(r =&gt; r.json());</pre>
+              <p class="muted" style="margin:10px 0 0">For a ready-to-run Python client, use <code class="inline-code">backend/scripts/stt_upload.py</code>. Incomplete sessions can be removed with <code class="inline-code">DELETE /api/upload/{uploadId}</code>.</p>
             </div>
 
             <hr class="api-divider" />
@@ -819,10 +869,23 @@ const MODEL_INFO = {
   "base":           { size: "~140 MB", note: "fast baseline, limited accuracy" },
   "tiny":           { size: "~40 MB",  note: "fastest, rough transcription" },
 };
-const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
-const MAX_AUDIO_LABEL = fmtBytes(MAX_AUDIO_BYTES);
+let MAX_AUDIO_BYTES = 500 * 1024 * 1024;
+let MAX_AUDIO_LABEL = fmtBytes(MAX_AUDIO_BYTES);
+function syncMaxUploadLabels() {
+  document.querySelectorAll("[data-max-upload]").forEach(el => { el.textContent = MAX_AUDIO_LABEL; });
+  if (!blobToSend && !transcribing) ui.fileinfo.textContent = `no file selected (max ${MAX_AUDIO_LABEL})`;
+}
 // Health snapshot kept around so changing Engine can re-filter the Model list.
-const healthState = { fwMap: {}, cppMap: {}, fwAvail: false, cppAvail: false, defaultEngine: "whisper-cpp", defaultModel: "large-v3" };
+const DEFAULT_UPLOAD_CHUNK_BYTES = 80 * 1024 * 1024;
+const healthState = {
+  fwMap: {}, cppMap: {}, fwAvail: false, cppAvail: false,
+  defaultEngine: "whisper-cpp", defaultModel: "large-v3",
+  uploadChunkBytes: DEFAULT_UPLOAD_CHUNK_BYTES,
+};
+function getUploadChunkSize() {
+  const n = Number(healthState.uploadChunkBytes);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_UPLOAD_CHUNK_BYTES;
+}
 
 // Which engine the request will actually run on (resolve "Auto" to the server default).
 function effectiveEngine() {
@@ -889,7 +952,7 @@ function applyEngine() {
   updateModelInfo();
 }
 
-let blobToSend = null, inputName = "audio";
+let blobToSend = null, inputName = "audio", transcribing = false;
 function setStatus(msg, isErr = false) {
   ui.status.textContent = msg;
   ui.status.classList.toggle("err", isErr);
@@ -1008,12 +1071,39 @@ function clearActiveJob(jobId = null) {
 }
 
 let _activeJobId = null;
-function showCancelBtn(jobId) { _activeJobId = jobId; ui.cancelBtn.classList.remove("hidden"); ui.cancelBtn.disabled = false; }
-function hideCancelBtn() { _activeJobId = null; ui.cancelBtn.classList.add("hidden"); }
+let _activeUploadId = null;
+let _activeUploadAbortController = null;
+let _uploadCancelRequested = false;
+function showCancelBtn(jobId, uploadId = null) {
+  _activeJobId = jobId || null;
+  _activeUploadId = uploadId || null;
+  ui.cancelBtn.classList.remove("hidden");
+  ui.cancelBtn.disabled = false;
+}
+function hideCancelBtn() {
+  _activeJobId = null;
+  _activeUploadId = null;
+  _activeUploadAbortController = null;
+  ui.cancelBtn.classList.add("hidden");
+}
+async function deleteUpload(uploadId) {
+  if (!uploadId) return;
+  try {
+    await fetch(`/api/upload/${encodeURIComponent(uploadId)}`, { method: "DELETE", headers: apiHeaders() });
+  } catch {}
+}
 ui.cancelBtn.addEventListener("click", async () => {
-  if (!_activeJobId) return;
+  const jobId = _activeJobId;
+  const uploadId = _activeUploadId;
+  if (!jobId && !uploadId) return;
   ui.cancelBtn.disabled = true;
-  try { await fetch(`/api/job/${_activeJobId}`, { method: "DELETE", headers: apiHeaders() }); } catch {}
+  if (uploadId) {
+    _uploadCancelRequested = true;
+    _activeUploadAbortController?.abort();
+    await deleteUpload(uploadId);
+    return;
+  }
+  try { await fetch(`/api/job/${jobId}`, { method: "DELETE", headers: apiHeaders() }); } catch {}
 });
 function getActiveJob() {
   try {
@@ -1163,6 +1253,16 @@ async function checkHealth() {
     healthState.cppAvail = !!cppEng.available;
     healthState.defaultEngine = p.defaultEngine || "whisper-cpp";
     healthState.defaultModel = p.defaultModel || "large-v3";
+    const serverMaxAudioBytes = Number(p.maxAudioBytes);
+    if (Number.isFinite(serverMaxAudioBytes) && serverMaxAudioBytes > 0) {
+      MAX_AUDIO_BYTES = serverMaxAudioBytes;
+      MAX_AUDIO_LABEL = fmtBytes(MAX_AUDIO_BYTES);
+      syncMaxUploadLabels();
+    }
+    const serverChunkBytes = Number(p.uploadChunkBytes);
+    healthState.uploadChunkBytes = Number.isFinite(serverChunkBytes) && serverChunkBytes > 0
+      ? Math.floor(serverChunkBytes)
+      : DEFAULT_UPLOAD_CHUNK_BYTES;
     // Count of models installed on ANY engine — for the KPI sub line.
     const allKeys = [...new Set([...Object.keys(healthState.fwMap), ...Object.keys(healthState.cppMap)])];
     const installed = allKeys.filter(k => healthState.fwMap[k] || healthState.cppMap[k]);
@@ -1250,7 +1350,9 @@ async function pickFile(f) {
   const seq = ++pickSeq;
   inputName = (f.name || "audio").replace(/\.[^.]+$/, "");
   let out = f;
-  if (f.size > COMPRESS_THRESHOLD) {
+  // Avoid decoding a very large file into browser memory; the resumable path
+  // can send the original bytes safely in Cloudflare-sized requests.
+  if (f.size > COMPRESS_THRESHOLD && f.size <= getUploadChunkSize()) {
     blobToSend = null; ui.go.disabled = true;
     ui.fileinfo.textContent = `${f.name} · ${fmtBytes(f.size)} · compressing…`;
     setStatus("Compressing audio in browser…");
@@ -1272,7 +1374,9 @@ async function pickFile(f) {
   ui.go.disabled = false;
   setStatus(out !== f
     ? `Compressed ${fmtBytes(f.size)} → ${fmtBytes(out.size)} ✓ Click “Transcribe file”.`
-    : "File ready. Click “Transcribe file”.");
+    : (f.size > getUploadChunkSize()
+      ? `Large file ready. It will upload in chunks up to ${fmtBytes(getUploadChunkSize())}. Click “Transcribe file”.`
+      : "File ready. Click “Transcribe file”."));
 }
 ui.drop.addEventListener("click", () => ui.file.click());
 ui.file.addEventListener("change", (e) => pickFile(e.target.files[0]));
@@ -1331,11 +1435,192 @@ ui.micBtn.addEventListener("click", async () => {
 
 // ---------- Transcribe (shared by file button + mic auto) ----------
 ui.go.addEventListener("click", transcribe);
-let transcribing = false;
+function parseUploadJson(raw) {
+  try {
+    const value = JSON.parse(raw || "");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch { return {}; }
+}
+function looksLikeHtml(raw) { return /<\s*(?:!doctype|html|head|body)\b/i.test(String(raw || "")); }
+function uploadErrorMessage(status, body, raw = "") {
+  // Cloudflare may return an HTML 413 page instead of the backend JSON error.
+  // Never put that page's markup into the status UI.
+  if (Number(status) === 413) {
+    if (body?.maxAudioBytes) return body.error || `File too large. Max ${fmtBytes(body.maxAudioBytes)}.`;
+    return "HTTP 413: A single upload chunk is still larger than the Cloudflare edge limit. Please retry with a smaller chunk size.";
+  }
+  const message = typeof body?.error === "string" ? body.error.trim() : "";
+  if (message && !looksLikeHtml(message) && !looksLikeHtml(raw)) return message;
+  return `HTTP ${status}`;
+}
+function uploadHttpError(status, body, raw = "") {
+  const error = new Error(uploadErrorMessage(status, body, raw));
+  error.status = Number(status) || 0;
+  return error;
+}
+function cancelledUploadError() {
+  const error = new Error("Cancelled");
+  error.code = "UPLOAD_CANCELLED";
+  return error;
+}
+function uploadWasCancelled(error) { return _uploadCancelRequested || error?.name === "AbortError"; }
+function waitBeforeUploadRetry(retry) {
+  return new Promise(resolve => setTimeout(resolve, 500 * (2 ** retry)));
+}
+function fetchUploadRequest(url, options = {}) {
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const request = { ...options };
+  if (controller) request.signal = controller.signal;
+  _activeUploadAbortController = controller;
+  return fetch(url, request).finally(() => {
+    if (_activeUploadAbortController === controller) _activeUploadAbortController = null;
+  });
+}
+async function requestUploadJson(url, method, payload) {
+  let response;
+  try {
+    response = await fetchUploadRequest(url, {
+      method,
+      headers: { "Content-Type": "application/json", ...apiHeaders() },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    if (uploadWasCancelled(error)) throw cancelledUploadError();
+    throw error;
+  }
+  const raw = await response.text();
+  const body = parseUploadJson(raw);
+  if (!response.ok) throw uploadHttpError(response.status, body, raw);
+  return body;
+}
+async function putUploadChunk(uploadId, index, chunk) {
+  const maxRetries = 2;
+  for (let retry = 0; ; retry++) {
+    if (_uploadCancelRequested) throw cancelledUploadError();
+    let response;
+    try {
+      response = await fetchUploadRequest(`/api/upload/${encodeURIComponent(uploadId)}/chunk/${index}`, {
+        method: "PUT",
+        headers: { "Content-Type": chunk.type || "application/octet-stream", ...apiHeaders() },
+        body: chunk,
+      });
+    } catch (error) {
+      if (uploadWasCancelled(error)) throw cancelledUploadError();
+      if (retry >= maxRetries) throw new Error(`Chunk ${index + 1} upload failed after ${maxRetries + 1} attempts: network error`);
+      await waitBeforeUploadRetry(retry);
+      continue;
+    }
+    let raw = "";
+    try { raw = await response.text(); }
+    catch (error) {
+      if (uploadWasCancelled(error)) throw cancelledUploadError();
+      if (retry >= maxRetries) throw new Error(`Chunk ${index + 1} upload failed after ${maxRetries + 1} attempts: network error`);
+      await waitBeforeUploadRetry(retry);
+      continue;
+    }
+    const body = parseUploadJson(raw);
+    if (response.ok) return body;
+    if (response.status >= 400 && response.status < 500) throw uploadHttpError(response.status, body, raw);
+    if (retry >= maxRetries) throw uploadHttpError(response.status, body, raw);
+    await waitBeforeUploadRetry(retry);
+  }
+}
+function transcribeSettings() {
+  if (uiMode === "simple") {
+    const simple = simpleSettings();
+    return {
+      model: simple.modelName,
+      engine: simple.engineName,
+      language: "auto",
+      useGpu: simple.useGpu,
+      prompt: "",
+      diarize: "0",
+      speakers: "",
+    };
+  }
+  return {
+    model: ui.model.value,
+    engine: ui.engine.value || "",
+    language: ui.lang.value.trim() || "auto",
+    useGpu: ui.engine.value === "faster-whisper" ? "0" : (ui.useGpu.checked ? "1" : "0"),
+    prompt: ui.prompt.value.trim(),
+    diarize: ui.diarize.checked ? "1" : "0",
+    speakers: ui.diarize.checked && ui.speakers.value ? ui.speakers.value : "",
+  };
+}
+function appendTranscribeSettings(fd, settings) {
+  Object.entries(settings).forEach(([key, value]) => {
+    if (value !== "" && value != null) fd.append(key, String(value));
+  });
+}
+async function submitJobResponse(body) {
+  if (!body?.jobId) return body;
+  saveActiveJob(body.jobId);
+  showCancelBtn(body.jobId);
+  return _pollJob(body.jobId);
+}
+async function postChunkedTranscribe(blob, settings, onUp) {
+  const configuredChunkSize = getUploadChunkSize();
+  const requestedTotalChunks = Math.ceil(blob.size / configuredChunkSize);
+  let uploadId = null;
+  try {
+    const init = await requestUploadJson("/api/upload/init", "POST", {
+      filename: blob.name || "audio",
+      size: blob.size,
+      contentType: blob.type || "application/octet-stream",
+      totalChunks: requestedTotalChunks,
+    });
+    uploadId = String(init.uploadId || "");
+    const returnedChunkSize = Number(init.chunkSize);
+    const chunkSize = Math.min(
+      configuredChunkSize,
+      Number.isFinite(returnedChunkSize) && returnedChunkSize > 0
+        ? Math.floor(returnedChunkSize)
+        : configuredChunkSize,
+    );
+    const returnedTotalChunks = Number(init.totalChunks);
+    const totalChunks = Number.isInteger(returnedTotalChunks) && returnedTotalChunks > 0
+      ? returnedTotalChunks
+      : Math.ceil(blob.size / chunkSize);
+    const expectedTotalChunks = Math.ceil(blob.size / chunkSize);
+    if (!uploadId || !Number.isInteger(chunkSize) || chunkSize <= 0 || totalChunks !== expectedTotalChunks) {
+      throw new Error("Server returned invalid upload chunk metadata.");
+    }
+
+    showCancelBtn(null, uploadId);
+    let uploadedBytes = 0;
+    for (let index = 0; index < totalChunks; index++) {
+      if (_uploadCancelRequested) throw cancelledUploadError();
+      const start = index * chunkSize;
+      const end = Math.min(start + chunkSize, blob.size);
+      const chunk = blob.slice(start, end, blob.type || "application/octet-stream");
+      if (chunk.size <= 0 || chunk.size > chunkSize) throw new Error("Invalid upload chunk size.");
+      await putUploadChunk(uploadId, index, chunk);
+      uploadedBytes = end;
+      onUp(uploadedBytes, blob.size);
+    }
+    if (uploadedBytes !== blob.size) throw new Error("Upload did not cover the complete file.");
+    onUp(-1, -1);
+    if (_uploadCancelRequested) throw cancelledUploadError();
+    const body = await requestUploadJson(
+      `/api/upload/${encodeURIComponent(uploadId)}/complete`,
+      "POST",
+      settings,
+    );
+    uploadId = null;
+    return submitJobResponse(body);
+  } catch (error) {
+    const cancelled = uploadWasCancelled(error);
+    if (uploadId) await deleteUpload(uploadId);
+    if (cancelled) throw cancelledUploadError();
+    throw error;
+  }
+}
 async function transcribe() {
   if (transcribing) return;              // guard against double-submit (button + mic auto)
   if (!blobToSend) { setStatus("No audio loaded.", true); return; }
   transcribing = true;
+  _uploadCancelRequested = false;
   ui.go.disabled = true; ui.go.textContent = "Transcribing…";
   ui.micBtn.disabled = true;
   setBusy(true);
@@ -1346,34 +1631,13 @@ async function transcribe() {
   setTranscriptState("loading");
   setSkeletonPhase("uploading");
   try {
-    if (uiMode === "simple") {
-      await healthReady.catch(() => {});
-    }
-    const fd = new FormData();
-    fd.append("audio", blobToSend, blobToSend.name || "audio");
-    if (uiMode === "simple") {
-      // Simple mode: zero-config. Use /health so Docker/faster-whisper and
-      // bare-metal/whisper-cpp both pick an installed default model.
-      const simple = simpleSettings();
-      fd.append("engine", simple.engineName);
-      fd.append("model", simple.modelName);
-      fd.append("language", "auto");
-      fd.append("useGpu", simple.useGpu);
-      fd.append("diarize", "0");
-    } else {
-      fd.append("model", ui.model.value);
-      if (ui.engine.value) fd.append("engine", ui.engine.value);
-      fd.append("language", ui.lang.value.trim() || "auto");
-      // faster-whisper runs on CPU here; whisper-cpp requires GPU=1. Force GPU off for faster-whisper.
-      fd.append("useGpu", (ui.engine.value === "faster-whisper") ? "0" : (ui.useGpu.checked ? "1" : "0"));
-      fd.append("diarize", ui.diarize.checked ? "1" : "0");
-      if (ui.diarize.checked && ui.speakers.value) fd.append("speakers", ui.speakers.value);
-      if (ui.prompt.value.trim()) fd.append("prompt", ui.prompt.value.trim());
-    }
+    // The chunk threshold comes from /health, including when Advanced mode is selected.
+    await healthReady.catch(() => {});
+    const settings = transcribeSettings();
 
     // Real upload progress + chips, then an indeterminate "server is transcribing" phase.
     let lastT = performance.now(), lastLoaded = 0, speed = 0;
-    const p = await postTranscribe(fd, (loaded, total) => {
+    const onUploadProgress = (loaded, total) => {
       if (loaded < 0) {                          // upload finished → server queued/working
         setDownloadStats([]); setBusy(true);
         setSkeletonPhase("queued");
@@ -1387,7 +1651,16 @@ async function transcribe() {
       if (speed > 0) chips.push(`${fmtBytes(speed)}/s`);
       if (speed > 0 && total > loaded) chips.push(`~${fmtSeconds((total - loaded) / speed)} left`);
       setDownloadStats(chips);
-    });
+    };
+    let p;
+    if (blobToSend.size > getUploadChunkSize()) {
+      p = await postChunkedTranscribe(blobToSend, settings, onUploadProgress);
+    } else {
+      const fd = new FormData();
+      fd.append("audio", blobToSend, blobToSend.name || "audio");
+      appendTranscribeSettings(fd, settings);
+      p = await postTranscribe(fd, onUploadProgress);
+    }
     renderResult(p);
     ui.stat.textContent = `${p.model} · ${p.language} · ${fmtDurationMs(p.durationMs)}`;
     setStatus("Done ✓ — processed locally on the server, audio deleted after.");
@@ -1425,17 +1698,11 @@ function postTranscribe(fd, onUp) {
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) onUp(e.loaded, e.total); };
     xhr.upload.onload = () => onUp(-1, -1);
     xhr.onload = async () => {
-      let body = {}; try { body = JSON.parse(xhr.responseText); } catch {}
+      const body = parseUploadJson(xhr.responseText);
       if (!(xhr.status >= 200 && xhr.status < 300)) {
-        return reject(new Error(body.error || `HTTP ${xhr.status}`));
+        return reject(uploadHttpError(xhr.status, body, xhr.responseText));
       }
-      if (!body.jobId) {
-        // Legacy: server returned result directly
-        return resolve(body);
-      }
-      saveActiveJob(body.jobId);
-      showCancelBtn(body.jobId);
-      try { resolve(await _pollJob(body.jobId)); }
+      try { resolve(await submitJobResponse(body)); }
       catch (e) { reject(e); }
     };
     xhr.onerror = () => reject(new Error("network error"));

@@ -2,6 +2,29 @@
 
 Newest first. Scope: `backend/public/` live UI (stt.yapweijun1996.com) unless noted.
 
+## 2026-08-05 — MP3 uploads + 500 MB per-file limit
+
+- MP3 is explicitly accepted by the browser file picker and API examples; the backend
+  continues to use ffmpeg's format detection for MP3 decoding.
+- Raised the default per-file limit to 500 MB and exposed the effective value as
+  `/health.maxAudioBytes`; the separate total upload-workspace cap remains 5 GB.
+- Uploads are streamed to disk in 1 MB chunks so the 500 MB limit does not require one
+  large in-memory bytes object. PWA cache version bumped to `2026-08-05-1`.
+- Source/config changes are not live until the PM2 `stt` process is reloaded.
+
+## 2026-08-05 — Cloudflare-friendly resumable uploads
+
+- Large files are uploaded as raw binary chunks (default 80 MiB per request) through
+  `/api/upload/init`, `/api/upload/{uploadId}/chunk/{index}`, and `/api/upload/{uploadId}/complete`;
+  the server reassembles one source file and creates one existing STT job.
+- The browser keeps the one-file selection UX, uses the resumable flow only above the returned
+  `health.uploadChunkBytes`, reports cumulative progress, retries transient chunk failures, and
+  cleans incomplete sessions on failure. Small files continue to use `/api/transcribe`.
+- This avoids Cloudflare's single-request body limit; the logical `MAX_AUDIO_BYTES` remains 500 MiB.
+- Added `backend/scripts/stt_upload.py` as a stdlib-only API client for non-browser callers;
+  it streams `init → raw chunk PUT → complete`, retries transient chunk errors, and polls the job.
+- Source/config changes are not live until the PM2 `stt` process is reloaded.
+
 ## 2026-06-14 — UI: Simple/Advanced modes + transcript states + PWA install/update/viewport
 
 All in `backend/public/index.html` (+ `sw.js` cache bumps). Verified in Chrome desktop + 390px.

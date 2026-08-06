@@ -8,6 +8,10 @@ services:
     ports:
       - "6601:6601"
     environment:
+      # Maximum size of one uploaded audio/video file.
+      MAX_AUDIO_BYTES: "524288000"
+      # Maximum raw request chunk for Cloudflare-friendly resumable uploads.
+      UPLOAD_CHUNK_BYTES: "83886080"
       # faster-whisper model: tiny | base | small | medium | large-v3 | large-v3-turbo
       WHISPER_MODEL: "large-v3-turbo"
       STT_ENGINE: "faster-whisper"
